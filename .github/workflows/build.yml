@@ -61,7 +61,7 @@ jobs:
         working-directory: app/android
         env:
           PP_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
+        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a,x86_64
       - name: Rename
         run: cp android/app/build/outputs/apk/release/app-release.apk ProxyProof.apk
       - uses: actions/upload-artifact@v4

@@ -119,10 +119,17 @@ export default function LiveSession() {
     ]);
   });
 
+  // Students can join the course mid-session; reload the roster when one we don't know shows up.
+  const rosterIds = useRef(new Set<string>());
+  useEffect(() => { rosterIds.current = new Set(roster.map((x) => x.id)); }, [roster]);
+
   useSocketEvents({
     mark: (e: Entry) => setRoster((r) => upsert(r, e)),
     unmark: (e: { id: string }) => setRoster((r) => r.map((x) => (x.id === e.id ? { ...x, present: false, method: null, markedAt: null, rssi: null } : x))),
-    attempt: (a: Attempt) => setAttempts((list) => [a, ...list.filter((x) => x.id !== a.id)].slice(0, 30)),
+    attempt: (a: Attempt) => {
+      setAttempts((list) => [a, ...list.filter((x) => x.id !== a.id)].slice(0, 30));
+      if (!rosterIds.current.has(a.studentId)) load();
+    },
     heard: (e: { id: string }) => setRoster((r) => r.map((x) => (x.id === e.id ? { ...x, heard: true } : x))),
     closed: () => load(),
   }, (s) => {

@@ -4,6 +4,14 @@ Bluetooth attendance that's hard to cheat. The organiser's phone broadcasts a co
 
 **[Download the APK](../../releases/latest)** (Android 7+)
 
+| Student | Marked | Organiser, live | Turned away |
+|---|---|---|---|
+| <img src="docs/screens/04-student-session-live.png" width="200"> | <img src="docs/screens/07-student-marked.png" width="200"> | <img src="docs/screens/05-organiser-live-dashboard.png" width="200"> | <img src="docs/screens/06b-organiser-blocked-attempts.png" width="200"> |
+| **Projector view** | **History** | **Admin: phone switches** | **Welcome** |
+| <img src="docs/screens/08-projector-view.png" width="200"> | <img src="docs/screens/09-student-history.png" width="200"> | <img src="docs/screens/11-admin-device-requests.png" width="200"> | <img src="docs/screens/01-welcome.png" width="200"> |
+
+<sub>Screens captured from a test run with simulated students. In a browser there's no Bluetooth, hence the red note at the top; on a phone it isn't there.</sub>
+
 ---
 
 ## How it works

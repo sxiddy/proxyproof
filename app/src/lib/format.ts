@@ -19,7 +19,13 @@ export function countdown(ms: number) {
 
 export function greeting() {
   const h = new Date().getHours();
-  return h < 12 ? 'Morning' : h < 17 ? 'Afternoon' : 'Evening';
+  return h < 5 ? 'Evening' : h < 12 ? 'Morning' : h < 17 ? 'Afternoon' : 'Evening';
 }
 
-export const firstName = (name: string) => name.trim().split(/\s+/)[0];
+const TITLES = /^(dr|prof|mr|mrs|ms)\.?$/i;
+
+/** "Ananya Iyer" -> "Ananya", but "Dr. Meera Nair" -> "Dr. Nair". */
+export function firstName(name: string) {
+  const parts = name.trim().split(/\s+/);
+  return parts.length > 1 && TITLES.test(parts[0]) ? `${parts[0]} ${parts[parts.length - 1]}` : parts[0];
+}
