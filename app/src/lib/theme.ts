@@ -5,9 +5,11 @@ export const colors = {
   sunk: '#EAE3D4',
   ink: '#1E1A16',
   inkSoft: '#4F473E',
-  muted: '#887F71',
+  muted: '#6E6558',
   line: '#DCD3C1',
-  accent: '#E2552B',
+  // Text/buttons use the deeper orange (4.7:1 on paper); `signal` is for rings and bars.
+  accent: '#B8441E',
+  signal: '#E2552B',
   accentSoft: '#F7DCCF',
   ok: '#2E7D4F',
   okSoft: '#D8EBDD',

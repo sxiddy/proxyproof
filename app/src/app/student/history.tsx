@@ -38,7 +38,7 @@ export default function StudentHistory() {
           <View style={{ marginTop: space(3), marginBottom: space(2) }}><Meter value={data.percentage} height={10} /></View>
           <Body style={{ fontSize: 13, marginBottom: space(6) }}>
             {data.percentage == null ? 'Nothing counted yet.'
-              : data.percentage >= 75 ? "You're above the usual 75% line. Keep it up."
+              : data.attended / data.total >= 0.75 ? "You're above the usual 75% line. Keep it up."
                 : `You're below the usual 75% line. You'd need ${needed(data.attended, data.total)} more in a row to get back over it.`}
           </Body>
           <Label style={{ marginBottom: space(1) }}>Every session</Label>

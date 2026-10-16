@@ -9,13 +9,15 @@ export default function JoinCourse() {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [joined, setJoined] = useState<string | null>(null);
 
   const submit = async () => {
     setBusy(true);
     setError(null);
     try {
-      await api('/courses/join', { body: { joinCode: code } });
-      router.back();
+      const res = await api<{ course: { name: string; code: string }; alreadyJoined: boolean }>('/courses/join', { body: { joinCode: code } });
+      setJoined(res.alreadyJoined ? `You were already in ${res.course.code}. All good.` : `You're in ${res.course.code}, ${res.course.name}.`);
+      setTimeout(() => router.back(), 1400);
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -29,6 +31,7 @@ export default function JoinCourse() {
       <H1>Join a course</H1>
       <Body style={{ marginTop: space(2), marginBottom: space(6) }}>Your organiser has a 6-character code. It's usually up on the board on day one.</Body>
       {error ? <Banner tone="danger" title="That didn't work">{error}</Banner> : null}
+      {joined ? <Banner tone="ok" title="Joined">{joined}</Banner> : null}
       <TextInput
         value={code}
         onChangeText={(t) => setCode(t.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))}
@@ -40,7 +43,7 @@ export default function JoinCourse() {
         style={styles.code}
         onSubmitEditing={() => code.length === 6 && submit()}
       />
-      <Button title="Join" onPress={submit} loading={busy} disabled={code.length !== 6} style={{ marginTop: space(6) }} />
+      <Button title="Join" onPress={submit} loading={busy} disabled={code.length !== 6 || !!joined} style={{ marginTop: space(6) }} />
     </Screen>
   );
 }

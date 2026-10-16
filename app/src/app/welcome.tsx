@@ -16,7 +16,7 @@ export default function Welcome() {
     >
       <View style={styles.head}>
         <Label>ProxyProof</Label>
-        <Pressable hitSlop={10} onPress={() => router.push('/settings')}>
+        <Pressable hitSlop={10} accessibilityRole="button" onPress={() => router.push('/settings')}>
           <Small>Server</Small>
         </Pressable>
       </View>

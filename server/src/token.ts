@@ -1,4 +1,4 @@
-import { createHmac, createPublicKey, randomBytes, timingSafeEqual, verify } from 'node:crypto';
+import { createHash, createHmac, createPublicKey, randomBytes, timingSafeEqual, verify } from 'node:crypto';
 
 // The beacon token works like a TOTP code: HMAC(session secret, beacon code +
 // time window), cut down to 8 bytes so it fits in a BLE advert. The organiser's
@@ -39,6 +39,17 @@ export function isTokenFresh(secretHex: string, beaconCode: number, token: strin
   return [current, current - 1, current + 1].some((w) =>
     timingSafeEqual(given, Buffer.from(tokenFor(secretHex, beaconCode, w), 'hex')),
   );
+}
+
+/**
+ * What a student's phone advertises back once it hears the beacon. It changes
+ * with every token (so it can't be used to track someone) and only the server,
+ * which knows each phone's public key, can tell whose it is. If the organiser's
+ * phone hears it, that student's phone was physically in the room, which a
+ * friend relaying codes over WhatsApp can't fake.
+ */
+export function echoFor(publicKeyHex: string, token: string) {
+  return createHash('sha256').update(`proxyproof-echo|${publicKeyHex}|${token}`).digest().subarray(0, 8).toString('hex');
 }
 
 /** The exact string a student's phone signs for a check-in. */

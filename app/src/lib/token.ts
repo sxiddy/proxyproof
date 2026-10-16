@@ -33,3 +33,16 @@ export function decodePayload(hex: string): { beaconCode: number; token: string 
 export function checkinMessage(p: { beaconCode: number; token: string; userId: string; ts: number; rssi: number; samples: number }) {
   return `proxyproof-checkin|v1|${p.beaconCode}|${p.token}|${p.userId}|${p.ts}|${p.rssi}|${p.samples}`;
 }
+
+/** "PP" + type 2: a student's phone answering the beacon. */
+export const ECHO_PREFIX = '505002';
+
+/** Mirrors echoFor() in server/src/token.ts. Changes with every token. */
+export function echoFor(publicKeyHex: string, token: string) {
+  return bytesToHex(sha256(utf8ToBytes(`proxyproof-echo|${publicKeyHex}|${token}`)).subarray(0, 8));
+}
+
+export function decodeEcho(hex: string): string | null {
+  const h = hex.toLowerCase();
+  return h.length === 22 && h.startsWith(ECHO_PREFIX) ? h.slice(6) : null;
+}

@@ -5,7 +5,7 @@ import request from 'supertest';
 import { createApp, ensureAdmin } from '../src/app.ts';
 import type { Ctx } from '../src/context.ts';
 import { createDb } from '../src/db.ts';
-import { checkinMessage, tokenFor, windowAt } from '../src/token.ts';
+import { checkinMessage, echoFor, tokenFor, windowAt } from '../src/token.ts';
 
 const events: { to: string; event: string; payload: any }[] = [];
 let ctx: Ctx;
@@ -38,6 +38,7 @@ describe('ProxyProof API', () => {
   let org: any, alice: any, bob: any, admin: string;
   const alicePhone = phone('hw-alice');
   const bobPhone = phone('hw-bob');
+  const bobNew = phone('hw-bob-new');
   let courseId: string, joinCode: string, session: any;
 
   before(async () => {
@@ -131,7 +132,7 @@ describe('ProxyProof API', () => {
   });
 
   it('turns a login on a new phone into a request an admin has to approve', async () => {
-    const newPhone = phone('hw-bob-new');
+    const newPhone = bobNew;
     const login = await request(app).post('/auth/login').send({ email: 'bob@test.dev', password: 'password1', device: deviceBody(newPhone) });
     assert.equal(login.body.deviceStatus, 'pending');
     const blocked = await request(app).post('/checkin').set(auth(login.body.token)).send(signedCheckin(newPhone, bob.user.id, session.beacon));
@@ -195,5 +196,44 @@ describe('ProxyProof API', () => {
     await ctx.db.query(`INSERT INTO attendance (session_id, student_id, device_id, method) VALUES ($1, $2, $3, 'ble')`, [s3.id, bob.user.id, d.id]);
     const res = await request(app).post('/checkin').set(auth(alice.token)).send(signedCheckin(alicePhone, alice.user.id, s3.beacon));
     assert.equal(res.body.error.code, 'device_used');
+  });
+  it('refuses a second account that reuses the same device key', async () => {
+    const clone = { ...deviceBody(alicePhone), hardwareId: 'hw-clone' };
+    const res = await request(app).post('/auth/register').send({ name: 'Mallory', email: 'mallory@test.dev', password: 'password1', role: 'student', device: clone });
+    assert.equal(res.status, 409);
+    assert.equal(res.body.error.code, 'device_taken');
+  });
+
+  it('treats a new key on the same hardware id as a switch that needs approval', async () => {
+    const thief = phone('hw-alice');
+    const res = await request(app).post('/auth/login').send({ email: 'alice@test.dev', password: 'password1', device: deviceBody(thief) });
+    assert.equal(res.body.deviceStatus, 'pending');
+  });
+
+  it("doesn't let a removed student's phone quietly mark them again", async () => {
+    const s4 = (await request(app).post(`/courses/${courseId}/sessions`).set(auth(org.token)).send({})).body;
+    assert.equal(s4.error?.code, 'session_live'); // s3 from the previous test is still open
+    const live = (await request(app).get(`/courses/${courseId}`).set(auth(org.token))).body.sessions.find((x: any) => x.live);
+    const s = (await request(app).get(`/sessions/${live.id}`).set(auth(org.token))).body.session;
+    await request(app).delete(`/sessions/${s.id}/attendance/${bob.user.id}`).set(auth(org.token));
+    const login = await request(app).post('/auth/login').send({ email: 'bob@test.dev', password: 'password1', device: deviceBody(bobNew) });
+    const again = await request(app).post('/checkin').set(auth(login.body.token)).send(signedCheckin(bobNew, bob.user.id, s.beacon));
+    assert.equal(again.body.error.code, 'removed');
+    await request(app).post(`/sessions/${s.id}/attendance`).set(auth(org.token)).send({ studentId: bob.user.id });
+    const ok = await request(app).post('/checkin').set(auth(login.body.token)).send(signedCheckin(bobNew, bob.user.id, s.beacon));
+    assert.equal(ok.body.status, 'already');
+  });
+
+  it("confirms a mark when the organiser's phone hears the student's echo", async () => {
+    const live = (await request(app).get(`/courses/${courseId}`).set(auth(org.token))).body.sessions.find((x: any) => x.live);
+    const s = (await request(app).get(`/sessions/${live.id}`).set(auth(org.token))).body.session;
+    await ctx.db.query('DELETE FROM attendance WHERE session_id = $1', [s.id]);
+    const r1 = await request(app).post('/checkin').set(auth(alice.token)).send(signedCheckin(alicePhone, alice.user.id, s.beacon));
+    assert.equal(r1.status, 201);
+    const token = tokenFor(s.beacon.secret, s.beacon.code, windowAt(Date.now(), s.beacon.windowSeconds));
+    const heard = await request(app).post(`/sessions/${s.id}/heard`).set(auth(org.token)).send({ echoes: [echoFor(alicePhone.publicKey, token), 'ffffffffffffffff'] });
+    assert.deepEqual(heard.body.heard, [alice.user.id]);
+    const view = await request(app).get(`/sessions/${s.id}`).set(auth(org.token));
+    assert.equal(view.body.roster.find((r: any) => r.id === alice.user.id).heard, true);
   });
 });

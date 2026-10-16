@@ -49,8 +49,18 @@ jobs:
       - run: npx tsc --noEmit
       - name: Generate native project
         run: npx expo prebuild --platform android --clean
+      - name: Unpack signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
+            echo "PP_KEYSTORE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
+          fi
       - name: Build release APK
         working-directory: app/android
+        env:
+          PP_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
       - name: Rename
         run: cp android/app/build/outputs/apk/release/app-release.apk ProxyProof.apk

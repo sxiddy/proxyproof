@@ -1,28 +1,30 @@
 import { useKeepAwake } from 'expo-keep-awake';
-import { router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, AppState, Pressable, StyleSheet, View } from 'react-native';
+import { router, useLocalSearchParams, usePreventRemove } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, AppState, Modal, Pressable, StyleSheet, View } from 'react-native';
 import { Chips, RANGE_OPTIONS } from '@/components/chips';
 import { Radar } from '@/components/radar';
 import { Banner, Body, Button, Card, H1, H2, H3, Label, Loading, Mono, Rule, Screen, Small, Stamp, Tag } from '@/components/ui';
 import { api, errorText, serverNow, syncClock } from '@/lib/api';
-import { bleAvailable, requestBlePermissions, useBluetoothState, useBroadcast } from '@/lib/ble';
+import { bleAvailable, canAdvertise, requestBlePermissions, useBluetoothState, useBroadcast, useScanner } from '@/lib/ble';
 import { shareCsv } from '@/lib/export';
 import { countdown, timeOf, when } from '@/lib/format';
 import { useSocketEvents } from '@/lib/socket';
-import { colors, space } from '@/lib/theme';
+import { colors, fonts, space } from '@/lib/theme';
+import { decodeEcho, ECHO_PREFIX } from '@/lib/token';
 
-type Entry = { id: string; name: string; rollNo: string | null; present: boolean; method: 'ble' | 'manual' | null; markedAt: string | null; rssi: number | null };
-type Attempt = { id: string; studentId: string; name: string; reason: string; rssi: number | null; at: string };
+type Entry = { id: string; name: string; rollNo: string | null; present: boolean; method: 'ble' | 'manual' | null; markedAt: string | null; rssi: number | null; heard?: boolean };
+type Attempt = { id: string; studentId: string; name: string; reason: string; rssi: number | null; at: string; count: number };
 type Session = {
   id: string; courseId: string; courseName: string; courseCode: string; startedAt: string; endsAt: string; closedAt: string | null;
   live: boolean; rssiThreshold: number; beacon: { code: number; secret: string; windowSeconds: number } | null;
 };
 
+// Worded gently where it's usually innocent (edge of the room, bad timing).
 const REASON_LABEL: Record<string, string> = {
-  stale_token: 'used an expired code',
+  stale_token: 'sent an expired code (often just timing)',
   bad_signature: "tried from a phone that isn't theirs",
-  too_far: 'was too far away',
+  too_far: 'was out of range',
   device_used: 'used a phone that already marked someone',
   device_pending: 'is on an unapproved phone',
   device_not_bound: 'has no linked phone',
@@ -45,6 +47,8 @@ export default function LiveSession() {
   const [foreground, setForeground] = useState(AppState.currentState === 'active');
   const [busy, setBusy] = useState<string | null>(null);
   const [showAbsent, setShowAbsent] = useState(true);
+  const [projector, setProjector] = useState(false);
+  const echoes = useRef(new Map<string, number>());
   const bt = useBluetoothState();
 
   const load = useCallback(async () => {
@@ -89,16 +93,57 @@ export default function LiveSession() {
 
   const broadcasting = live && permission === true && bt === 'on' && foreground && bleAvailable;
   const { token, error: bleError, nextChangeAt } = useBroadcast(session?.beacon ?? null, broadcasting);
+  const cantBroadcast = live && bleAvailable && bt === 'on' && permission === true && !canAdvertise();
+
+  // Listen for students' phones answering back, and tell the server which ones we heard.
+  useScanner(broadcasting, ECHO_PREFIX, (e) => {
+    const echo = decodeEcho(e.payload);
+    if (echo) echoes.current.set(echo, Date.now());
+  });
+  useEffect(() => {
+    if (!broadcasting) return;
+    const t = setInterval(() => {
+      const cutoff = Date.now() - 15_000;
+      const recent = [...echoes.current].filter(([, at]) => at > cutoff).map(([e]) => e);
+      echoes.current = new Map([...echoes.current].filter(([, at]) => at > cutoff));
+      if (recent.length) api(`/sessions/${id}/heard`, { body: { echoes: recent.slice(0, 300) } }).catch(() => {});
+    }, 3000);
+    return () => clearInterval(t);
+  }, [broadcasting, id]);
+
+  // Backing out stops the beacon, so make sure that's on purpose.
+  usePreventRemove(live, ({ repeat }) => {
+    Alert.alert('Leave the live screen?', "Broadcasting pauses until you come back. The session itself keeps running.", [
+      { text: 'Stay', style: 'cancel' },
+      { text: 'Leave', style: 'destructive', onPress: repeat },
+    ]);
+  });
 
   useSocketEvents({
     mark: (e: Entry) => setRoster((r) => upsert(r, e)),
     unmark: (e: { id: string }) => setRoster((r) => r.map((x) => (x.id === e.id ? { ...x, present: false, method: null, markedAt: null, rssi: null } : x))),
     attempt: (a: Attempt) => setAttempts((list) => [a, ...list.filter((x) => x.id !== a.id)].slice(0, 30)),
+    heard: (e: { id: string }) => setRoster((r) => r.map((x) => (x.id === e.id ? { ...x, heard: true } : x))),
     closed: () => load(),
-  }, (s) => s.emit('watch', id));
+  }, (s) => {
+    // Re-join the room and catch up on anything that happened while disconnected.
+    s.emit('watch', id);
+    load();
+  });
 
   const present = useMemo(() => roster.filter((r) => r.present).sort((a, b) => +new Date(b.markedAt!) - +new Date(a.markedAt!)), [roster]);
   const absent = useMemo(() => roster.filter((r) => !r.present), [roster]);
+  const flagged = useMemo(() => {
+    const by = new Map<string, { name: string; total: number; reasons: string[]; at: string }>();
+    for (const a of attempts) {
+      const g = by.get(a.studentId) ?? { name: a.name, total: 0, reasons: [], at: a.at };
+      g.total += a.count ?? 1;
+      g.reasons.push(REASON_LABEL[a.reason] ?? a.reason);
+      if (a.at > g.at) g.at = a.at;
+      by.set(a.studentId, g);
+    }
+    return [...by.entries()].sort((x, y) => (x[1].at < y[1].at ? 1 : -1));
+  }, [attempts]);
 
   const act = async (key: string, fn: () => Promise<unknown>) => {
     setBusy(key);
@@ -156,6 +201,8 @@ export default function LiveSession() {
           ) : null}
           {bt === 'off' ? <Banner tone="warn" title="Bluetooth is off">Turn it on and broadcasting starts again by itself.</Banner> : null}
           {bleError && bt === 'on' ? <Banner tone="danger" title="Broadcast problem">{bleError}</Banner> : null}
+          {cantBroadcast ? <Banner tone="danger" title="This phone can't broadcast">Its Bluetooth chip doesn't support advertising. Use another phone, or the laptop beacon in the README. You can still mark people by hand.</Banner> : null}
+          {bt === 'location_off' ? <Banner tone="warn" title="Turn Location on">On this Android version the app can't hear students' phones while Location is off.</Banner> : null}
 
           <Card style={styles.broadcast}>
             <Radar size={190} active={broadcasting && !!token}>
@@ -197,7 +244,8 @@ export default function LiveSession() {
           <Small>enrolled</Small>
         </View>
         <View style={{ flex: 1, alignItems: 'flex-end' }}>
-          {attempts.length ? <Tag tone="danger" text={`${attempts.length} blocked`} /> : null}
+          {flagged.length ? <Tag tone="danger" text={`${flagged.length} flagged`} /> : null}
+          {live ? <Button small kind="outline" title="Projector view" onPress={() => setProjector(true)} style={{ marginTop: space(2) }} /> : null}
         </View>
       </View>
 
@@ -211,6 +259,11 @@ export default function LiveSession() {
               {timeOf(e.markedAt!)} · {e.method === 'manual' ? 'added by you' : `Bluetooth${e.rssi != null ? `, ${e.rssi} dBm` : ''}`}
               {e.rollNo ? ` · ${e.rollNo}` : ''}
             </Small>
+            {e.method === 'ble' ? (
+              <Small color={e.heard ? colors.ok : colors.muted} style={{ marginTop: 2 }}>
+                {e.heard ? '✓ Your phone heard theirs' : live ? 'Waiting to hear their phone…' : 'Not heard by your phone'}
+              </Small>
+            ) : null}
           </View>
           <Button small kind="ghost" title="Remove" onPress={() => remove(e)} loading={busy === e.id} />
         </View>
@@ -229,18 +282,38 @@ export default function LiveSession() {
         </View>
       ))}
 
-      {attempts.length ? (
+      {flagged.length ? (
         <>
-          <Label style={{ marginTop: space(6), marginBottom: space(1) }}>Blocked attempts</Label>
-          <Small style={{ marginBottom: space(2) }}>Check-ins the server turned down. Worth a look if one name keeps showing up.</Small>
-          {attempts.slice(0, 12).map((a) => (
-            <View key={a.id} style={styles.row}>
-              <Mono style={{ fontSize: 12, color: colors.muted, width: 64 }}>{timeOf(a.at)}</Mono>
-              <Body style={{ flex: 1, fontSize: 14 }}><H3 style={{ fontSize: 14 }}>{a.name}</H3> {REASON_LABEL[a.reason] ?? a.reason}</Body>
+          <Label style={{ marginTop: space(6), marginBottom: space(1) }}>Turned away</Label>
+          <Small style={{ marginBottom: space(2) }}>Check-ins the server refused. "Out of range" is usually just someone at the back. Look twice at anything else.</Small>
+          {flagged.slice(0, 15).map(([sid, g]) => (
+            <View key={sid} style={styles.row}>
+              <View style={{ flex: 1 }}>
+                <H3 style={{ fontSize: 14 }}>{g.name}</H3>
+                <Small>{[...new Set(g.reasons)].join(' · ')}</Small>
+              </View>
+              <Mono style={{ fontSize: 12, color: colors.muted }}>{g.total > 1 ? `${g.total}× · ` : ''}{timeOf(g.at)}</Mono>
             </View>
           ))}
         </>
       ) : null}
+
+      <Modal visible={projector && live} animationType="fade" onRequestClose={() => setProjector(false)} statusBarTranslucent>
+        <Pressable style={styles.projector} onPress={() => setProjector(false)} accessibilityLabel="Close projector view">
+          <Mono style={{ color: colors.line, fontSize: 16 }}>{session.courseCode} · {countdown(remaining)} left</Mono>
+          <View style={{ flexDirection: 'row', alignItems: 'baseline', marginVertical: space(4) }}>
+            <Mono style={{ color: colors.paper, fontSize: 120, lineHeight: 130 }}>{present.length}</Mono>
+            <Mono style={{ color: colors.muted, fontSize: 48 }}> / {roster.length}</Mono>
+          </View>
+          <Body style={{ color: colors.line, fontFamily: fonts.displayItalic, fontSize: 22 }}>are in. Keep ProxyProof open if you aren't yet.</Body>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space(2), marginTop: space(8), justifyContent: 'center' }}>
+            {present.slice(0, 18).map((e) => (
+              <View key={e.id} style={styles.slip}><Body style={{ color: colors.ink, fontSize: 14 }}>{e.name}</Body></View>
+            ))}
+          </View>
+          <Small style={{ color: colors.muted, marginTop: space(8) }}>Tap anywhere to go back</Small>
+        </Pressable>
+      </Modal>
 
       <Rule />
       <View style={{ gap: space(2.5) }}>
@@ -270,7 +343,10 @@ const styles = StyleSheet.create({
   broadcast: { alignItems: 'center', marginTop: space(5), paddingVertical: space(6), marginBottom: space(5) },
   token: { fontSize: 22, letterSpacing: 2, color: colors.accent, marginTop: space(2) },
   tokenBar: { height: 3, backgroundColor: colors.sunk, borderRadius: 2, marginTop: space(2), overflow: 'hidden' },
-  tokenFill: { height: '100%', backgroundColor: colors.accent },
+  tokenFill: { height: '100%', backgroundColor: colors.signal },
   counter: { flexDirection: 'row', alignItems: 'flex-end', gap: space(3), marginTop: space(6) },
   row: { flexDirection: 'row', alignItems: 'center', gap: space(3), paddingVertical: space(3), borderBottomWidth: 1, borderBottomColor: colors.line },
+  projector: { flex: 1, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center', padding: space(8) },
+  // Names land like little paper slips pinned to the board.
+  slip: { backgroundColor: colors.paper, paddingHorizontal: space(3), paddingVertical: space(1.5), borderRadius: 3, transform: [{ rotate: '-1.5deg' }] },
 });

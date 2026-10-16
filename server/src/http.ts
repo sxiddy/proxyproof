@@ -80,5 +80,6 @@ export function csvCell(value: unknown) {
 }
 
 export function toCsv(rows: unknown[][]) {
-  return rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+  // The BOM makes Excel read names like "Zoë" or Devanagari correctly.
+  return '﻿' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }

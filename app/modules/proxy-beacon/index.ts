@@ -1,7 +1,7 @@
 import { NativeModule, requireOptionalNativeModule } from 'expo';
 
 export type BeaconEvent = { payload: string; rssi: number; at: number };
-export type BluetoothState = 'on' | 'off' | 'unsupported';
+export type BluetoothState = 'on' | 'off' | 'location_off' | 'unsupported';
 
 type Events = {
   onBeacon: (e: BeaconEvent) => void;

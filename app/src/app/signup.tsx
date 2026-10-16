@@ -47,7 +47,7 @@ export default function Signup() {
       <Label style={{ marginBottom: space(2) }}>I'm a</Label>
       <View style={styles.segment}>
         {(['student', 'organiser'] as const).map((r) => (
-          <Pressable key={r} onPress={() => setRole(r)} style={[styles.seg, role === r && styles.segOn]} accessibilityRole="radio" accessibilityState={{ selected: role === r }}>
+          <Pressable key={r} onPress={() => setRole(r)} style={[styles.seg, role === r && styles.segOn]} accessibilityRole="radio" accessibilityState={{ checked: role === r }}>
             <Text style={[styles.segText, role === r && { color: colors.paper }]}>{r === 'student' ? 'Student' : 'Organiser'}</Text>
           </Pressable>
         ))}

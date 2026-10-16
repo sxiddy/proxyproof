@@ -29,6 +29,7 @@ export const REASONS = {
   too_far: "You're a bit far from the organiser. Move closer.",
   weak_reading: 'Signal is still settling. Hold on a second.',
   device_used: 'This phone already marked someone else in this session.',
+  removed: 'Your organiser took you off this session. Talk to them if that looks wrong.',
 } as const;
 
 type Reason = keyof typeof REASONS;
@@ -46,10 +47,12 @@ export function checkinRoutes({ db, config, rt }: Ctx) {
 
     const reject = async (reason: Reason, status = 403, log = true): Promise<never> => {
       if (log && sessionId) {
-        const { rows: [a] } = await db.query(
-          'INSERT INTO checkin_attempts (session_id, student_id, reason, rssi) VALUES ($1, $2, $3, $4) RETURNING id, at',
+        const { rows: [a] } = await db.query(`
+          INSERT INTO checkin_attempts (session_id, student_id, reason, rssi) VALUES ($1, $2, $3, $4)
+          ON CONFLICT (session_id, student_id, reason) DO UPDATE SET count = checkin_attempts.count + 1, rssi = EXCLUDED.rssi, at = now()
+          RETURNING id, at, count`,
           [sessionId, me.id, reason, p.rssi]);
-        rt.toSession(sessionId, 'attempt', { id: String(a.id), studentId: me.id, name: me.name, reason, rssi: p.rssi, at: a.at });
+        rt.toSession(sessionId, 'attempt', { id: String(a.id), studentId: me.id, name: me.name, reason, rssi: p.rssi, at: a.at, count: a.count });
       }
       throw new HttpError(status, reason, REASONS[reason]);
     };
@@ -67,6 +70,10 @@ export function checkinRoutes({ db, config, rt }: Ctx) {
       'SELECT 1 FROM enrollments WHERE course_id = $1 AND student_id = $2', [s.course_id, me.id]);
     if (!enrolled) await reject('not_enrolled', 403, false);
     sessionId = s.id;
+
+    const { rows: [removed] } = await db.query(
+      'SELECT 1 FROM attendance_removals WHERE session_id = $1 AND student_id = $2', [s.id, me.id]);
+    if (removed) await reject('removed', 403, false);
 
     // Already marked? Then the phone can stop scanning; nothing else to check.
     const { rows: [already] } = await db.query(
@@ -120,9 +127,15 @@ export function checkinRoutes({ db, config, rt }: Ctx) {
       LEFT JOIN attendance a ON a.session_id = s.id AND a.student_id = e.student_id
       WHERE e.student_id = $1 AND ((s.closed_at IS NOT NULL AND s.started_at >= e.joined_at) OR a.student_id IS NOT NULL)
       ORDER BY s.started_at DESC LIMIT 200`, [req.user!.id]);
-    const attended = rows.filter((r) => r.marked_at).length;
+    // Totals come from the full history, the list is just the latest 200.
+    const { rows: [t] } = await db.query(`
+      SELECT count(*)::int AS total, count(a.student_id)::int AS attended
+      FROM enrollments e
+      JOIN sessions s ON s.course_id = e.course_id
+      LEFT JOIN attendance a ON a.session_id = s.id AND a.student_id = e.student_id
+      WHERE e.student_id = $1 AND ((s.closed_at IS NOT NULL AND s.started_at >= e.joined_at) OR a.student_id IS NOT NULL)`, [req.user!.id]);
     res.json({
-      attended, total: rows.length, percentage: percent(attended, rows.length),
+      attended: t.attended, total: t.total, percentage: percent(t.attended, t.total),
       sessions: rows.map((r) => ({
         id: r.id, courseId: r.course_id, courseName: r.course_name, courseCode: r.code,
         startedAt: r.started_at, status: r.marked_at ? 'present' : 'absent', markedAt: r.marked_at, method: r.method,

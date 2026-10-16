@@ -4,7 +4,7 @@ import type { Ctx } from '../context.ts';
 import type { Db, Queryable } from '../db.ts';
 import { fail, parse, requireAuth, toCsv } from '../http.ts';
 import type { Realtime } from '../realtime.ts';
-import { DEFAULT_WINDOW_SECONDS, newBeaconCode, newSecret } from '../token.ts';
+import { DEFAULT_WINDOW_SECONDS, echoFor, newBeaconCode, newSecret, tokenFor, windowAt } from '../token.ts';
 import { formatStamp, ownedCourse, safeName } from './courses.ts';
 
 const uuid = /^[0-9a-f-]{36}$/i;
@@ -49,10 +49,14 @@ function sessionJson(s: any, withBeacon: boolean) {
 
 export async function rosterEntry(q: Queryable, sessionId: string, studentId: string) {
   const { rows: [r] } = await q.query(`
-    SELECT u.id, u.name, u.roll_no, a.method, a.marked_at, a.rssi
+    SELECT u.id, u.name, u.roll_no, a.method, a.marked_at, a.rssi, a.heard_at
     FROM users u LEFT JOIN attendance a ON a.student_id = u.id AND a.session_id = $1
     WHERE u.id = $2`, [sessionId, studentId]);
-  return r && { id: r.id, name: r.name, rollNo: r.roll_no, present: !!r.marked_at, method: r.method, markedAt: r.marked_at, rssi: r.rssi };
+  return r && entryJson(r);
+}
+
+export function entryJson(r: any) {
+  return { id: r.id, name: r.name, rollNo: r.roll_no, present: !!r.marked_at, method: r.method, markedAt: r.marked_at, rssi: r.rssi, heard: !!r.heard_at };
 }
 
 export function sessionRoutes({ db, config, rt }: Ctx) {
@@ -79,6 +83,9 @@ export function sessionRoutes({ db, config, rt }: Ctx) {
           RETURNING *, $8::text AS course_name, $9::text AS course_code`,
           [course.id, req.user!.id, newBeaconCode(), newSecret(), DEFAULT_WINDOW_SECONDS, body.rssiThreshold,
             body.durationMinutes, course.name, course.code]);
+        // Nudge enrolled students' apps so "session on now" shows up without a refresh.
+        const { rows: students } = await db.query('SELECT student_id FROM enrollments WHERE course_id = $1', [course.id]);
+        for (const st of students) rt.toUser(st.student_id, 'session_started', { sessionId: s.id, courseName: course.name });
         return res.status(201).json({ session: sessionJson(s, true), serverTime: Date.now() });
       } catch (err: any) {
         if (err?.code !== '23505') throw err; // beacon code clash, roll again
@@ -90,28 +97,25 @@ export function sessionRoutes({ db, config, rt }: Ctx) {
   r.get('/sessions/:id', organiser, async (req, res) => {
     const s = await ownedSession(db, req.params.id as string, req.user!.id);
     const { rows: roster } = await db.query(`
-      SELECT u.id, u.name, u.roll_no, a.method, a.marked_at, a.rssi
+      SELECT u.id, u.name, u.roll_no, a.method, a.marked_at, a.rssi, a.heard_at
       FROM enrollments e
       JOIN users u ON u.id = e.student_id
       LEFT JOIN attendance a ON a.session_id = $1 AND a.student_id = u.id
       WHERE e.course_id = $2
       UNION
-      SELECT u.id, u.name, u.roll_no, a.method, a.marked_at, a.rssi
+      SELECT u.id, u.name, u.roll_no, a.method, a.marked_at, a.rssi, a.heard_at
       FROM attendance a JOIN users u ON u.id = a.student_id
       WHERE a.session_id = $1
       ORDER BY marked_at DESC NULLS LAST, name`, [s.id, s.course_id]);
     const { rows: attempts } = await db.query(`
-      SELECT ca.id, ca.reason, ca.rssi, ca.at, u.id AS student_id, u.name
+      SELECT ca.id, ca.reason, ca.rssi, ca.at, ca.count, u.id AS student_id, u.name
       FROM checkin_attempts ca JOIN users u ON u.id = ca.student_id
       WHERE ca.session_id = $1 ORDER BY ca.at DESC LIMIT 30`, [s.id]);
     res.json({
       session: sessionJson(s, true),
       serverTime: Date.now(),
-      roster: roster.map((r) => ({
-        id: r.id, name: r.name, rollNo: r.roll_no, present: !!r.marked_at,
-        method: r.method, markedAt: r.marked_at, rssi: r.rssi,
-      })),
-      attempts: attempts.map((a) => ({ id: String(a.id), studentId: a.student_id, name: a.name, reason: a.reason, rssi: a.rssi, at: a.at })),
+      roster: roster.map(entryJson),
+      attempts: attempts.map((a) => ({ id: String(a.id), studentId: a.student_id, name: a.name, reason: a.reason, rssi: a.rssi, at: a.at, count: a.count })),
     });
   });
 
@@ -137,6 +141,7 @@ export function sessionRoutes({ db, config, rt }: Ctx) {
     const { rows: [enrolled] } = await db.query(
       'SELECT 1 FROM enrollments WHERE course_id = $1 AND student_id = $2', [s.course_id, studentId]);
     if (!enrolled) fail(400, 'not_enrolled', "That student isn't in this course.");
+    await db.query('DELETE FROM attendance_removals WHERE session_id = $1 AND student_id = $2', [s.id, studentId]);
     await db.query(`
       INSERT INTO attendance (session_id, student_id, method, marked_by) VALUES ($1, $2, 'manual', $3)
       ON CONFLICT (session_id, student_id) DO NOTHING`, [s.id, studentId, req.user!.id]);
@@ -150,25 +155,48 @@ export function sessionRoutes({ db, config, rt }: Ctx) {
     const s = await ownedSession(db, req.params.id as string, req.user!.id);
     const studentId = req.params.studentId as string;
     if (!uuid.test(studentId)) fail(404, 'not_found', 'Student not found.');
-    await db.query('DELETE FROM attendance WHERE session_id = $1 AND student_id = $2', [s.id, studentId]);
+    await db.tx(async (q) => {
+      await q.query('DELETE FROM attendance WHERE session_id = $1 AND student_id = $2', [s.id, studentId]);
+      await q.query('INSERT INTO attendance_removals (session_id, student_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [s.id, studentId]);
+    });
     rt.toSession(s.id, 'unmark', { id: studentId });
     rt.toUser(studentId, 'unmarked', { sessionId: s.id, courseName: s.course_name });
     res.json({ ok: true });
   });
 
+  // The organiser's phone reports which student echoes it heard over the last few seconds.
+  r.post('/sessions/:id/heard', organiser, async (req, res) => {
+    const s = await ownedSession(db, req.params.id as string, req.user!.id);
+    const { echoes } = parse(z.object({ echoes: z.array(z.string().regex(/^[0-9a-f]{16}$/)).max(300) }), req.body);
+    if (!echoes.length || !isLive(s)) return res.json({ heard: [] });
+    const wanted = new Set(echoes);
+    const w = windowAt(Date.now(), s.window_seconds);
+    const tokens = [w, w - 1, w + 1].map((x) => tokenFor(s.secret, s.beacon_code, x));
+    // Bluetooth marks not yet confirmed, with the phone that made them.
+    const { rows } = await db.query(`
+      SELECT a.student_id, d.public_key FROM attendance a JOIN devices d ON d.id = a.device_id
+      WHERE a.session_id = $1 AND a.heard_at IS NULL`, [s.id]);
+    const heard = rows.filter((r) => tokens.some((t) => wanted.has(echoFor(r.public_key, t)))).map((r) => r.student_id as string);
+    if (heard.length) {
+      await db.query('UPDATE attendance SET heard_at = now() WHERE session_id = $1 AND student_id = ANY($2::uuid[])', [s.id, heard]);
+      for (const id of heard) rt.toSession(s.id, 'heard', { id });
+    }
+    res.json({ heard });
+  });
+
   r.get('/sessions/:id/export.csv', organiser, async (req, res) => {
     const s = await ownedSession(db, req.params.id as string, req.user!.id);
     const { rows } = await db.query(`
-      SELECT u.name, u.roll_no, u.email, a.method, a.marked_at, a.rssi
+      SELECT u.name, u.roll_no, u.email, a.method, a.marked_at, a.rssi, a.heard_at
       FROM enrollments e JOIN users u ON u.id = e.student_id
       LEFT JOIN attendance a ON a.session_id = $1 AND a.student_id = u.id
       WHERE e.course_id = $2 ORDER BY u.name`, [s.id, s.course_id]);
     const csv = toCsv([
-      ['Name', 'Roll no', 'Email', 'Status', 'Marked at', 'How', 'Signal (dBm)'],
+      ['Name', 'Roll no', 'Email', 'Status', 'Marked at', 'How', 'Signal (dBm)', 'Heard by organiser phone'],
       ...rows.map((r) => [
         r.name, r.roll_no ?? '', r.email, r.marked_at ? 'Present' : 'Absent',
         r.marked_at ? formatStamp(r.marked_at) : '', r.method === 'manual' ? 'Added by organiser' : r.method ? 'Bluetooth' : '',
-        r.rssi ?? '',
+        r.rssi ?? '', r.heard_at ? 'Yes' : r.method === 'ble' ? 'No' : '',
       ]),
     ]);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');

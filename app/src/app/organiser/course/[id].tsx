@@ -142,13 +142,15 @@ export default function OrganiserCourse() {
             <Body style={{ color: colors.ink }}>{s.name}</Body>
             <Small>{s.rollNo ?? s.email}</Small>
           </View>
-          <View style={{ width: 90 }}>
+          <View style={{ width: 80 }}>
             <Mono style={{ fontSize: 13, textAlign: 'right', marginBottom: 4 }}>{s.percentage == null ? '—' : `${s.percentage}%`}</Mono>
             <Meter value={s.percentage} height={5} />
           </View>
+          <Pressable hitSlop={10} onPress={() => removeStudent(s)} accessibilityRole="button" accessibilityLabel={`Remove ${s.name}`} style={{ paddingLeft: space(2) }}>
+            <Small color={colors.danger}>Remove</Small>
+          </Pressable>
         </Pressable>
       ))}
-      {tab === 'students' && data.students.length ? <Small style={{ marginTop: space(2) }}>Long-press a student to remove them.</Small> : null}
 
       <Rule />
       <Button title="Export full register (CSV)" kind="outline" onPress={exportAll} loading={exporting} disabled={!data.sessions.length} />

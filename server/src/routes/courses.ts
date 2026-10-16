@@ -28,7 +28,8 @@ export async function ownedCourse(q: Queryable, courseId: string, organiserId: s
 const COUNTS = `(s.closed_at IS NOT NULL AND s.started_at >= e.joined_at) OR a.student_id IS NOT NULL`;
 
 export function percent(attended: number, total: number) {
-  return total ? Math.round((attended / total) * 100) : null;
+  // Floor, so 74.6% never shows as a reassuring 75%.
+  return total ? Math.floor((attended / total) * 100) : null;
 }
 
 export function courseRoutes({ db, config }: Ctx) {

@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withTiming, type SharedValue } from 'react-native-reanimated';
+import Animated, { Easing, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withTiming, type SharedValue } from 'react-native-reanimated';
 import { colors } from '@/lib/theme';
 
 // Expanding rings, used both for "broadcasting" and "listening".
@@ -12,7 +12,10 @@ function Ring({ progress, color }: { progress: SharedValue<number>; color: strin
   return <Animated.View style={[StyleSheet.absoluteFill, styles.ring, { borderColor: color }, style]} />;
 }
 
-export function Radar({ size = 220, active = true, color = colors.accent, children }: { size?: number; active?: boolean; color?: string; children?: React.ReactNode }) {
+export function Radar({ size = 220, active: wanted = true, color = colors.signal, children }: { size?: number; active?: boolean; color?: string; children?: React.ReactNode }) {
+  // With reduced motion on, the rings simply don't pulse. The centre still says what's happening.
+  const reduced = useReducedMotion();
+  const active = wanted && !reduced;
   const a = useSharedValue(0);
   const b = useSharedValue(0);
   const c = useSharedValue(0);
@@ -35,7 +38,8 @@ export function Radar({ size = 220, active = true, color = colors.accent, childr
 
   return (
     <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-      <View style={[StyleSheet.absoluteFill, styles.ring, { borderColor: colors.line, borderStyle: 'dashed' }]} />
+      <View importantForAccessibility="no-hide-descendants" style={StyleSheet.absoluteFill}>
+        <View style={[StyleSheet.absoluteFill, styles.ring, { borderColor: reduced && wanted ? color : colors.line, borderStyle: 'dashed' }]} />
       {active ? (
         <>
           <Ring progress={a} color={color} />
@@ -43,6 +47,7 @@ export function Radar({ size = 220, active = true, color = colors.accent, childr
           <Ring progress={c} color={color} />
         </>
       ) : null}
+      </View>
       <View style={[styles.core, { width: size * 0.42, height: size * 0.42, borderRadius: size }]}>{children}</View>
     </View>
   );

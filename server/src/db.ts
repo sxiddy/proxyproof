@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS devices (
 CREATE UNIQUE INDEX IF NOT EXISTS devices_one_active_per_user ON devices (user_id) WHERE status = 'active';
 CREATE UNIQUE INDEX IF NOT EXISTS devices_one_pending_per_user ON devices (user_id) WHERE status = 'pending';
 CREATE UNIQUE INDEX IF NOT EXISTS devices_hardware_active ON devices (hardware_id) WHERE status = 'active';
+-- A key belongs to exactly one phone and one student, so two accounts can't share it.
+CREATE UNIQUE INDEX IF NOT EXISTS devices_key_live ON devices (public_key) WHERE status IN ('active', 'pending');
 
 CREATE TABLE IF NOT EXISTS courses (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -81,19 +83,33 @@ CREATE TABLE IF NOT EXISTS attendance (
   rssi       integer,
   marked_by  uuid REFERENCES users(id) ON DELETE SET NULL,
   marked_at  timestamptz NOT NULL DEFAULT now(),
+  -- Set when the organiser's phone also heard this student's phone echo back.
+  heard_at   timestamptz,
+  PRIMARY KEY (session_id, student_id)
+);
+
+-- Students the organiser removed by hand. Stops the phone quietly marking them again.
+CREATE TABLE IF NOT EXISTS attendance_removals (
+  session_id uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  student_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  removed_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (session_id, student_id)
 );
 -- The "one phone marks one student" rule, enforced by the database itself.
 CREATE UNIQUE INDEX IF NOT EXISTS attendance_one_device ON attendance (session_id, device_id) WHERE device_id IS NOT NULL;
 
 -- Rejected check-ins, so the organiser can see when someone is trying it on.
+-- One row per (session, student, reason) with a counter, so a student hovering
+-- at the edge of range doesn't flood the list.
 CREATE TABLE IF NOT EXISTS checkin_attempts (
   id         bigserial PRIMARY KEY,
-  session_id uuid REFERENCES sessions(id) ON DELETE CASCADE,
+  session_id uuid NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   student_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   reason     text NOT NULL,
   rssi       integer,
-  at         timestamptz NOT NULL DEFAULT now()
+  count      integer NOT NULL DEFAULT 1,
+  at         timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (session_id, student_id, reason)
 );
 CREATE INDEX IF NOT EXISTS checkin_attempts_session ON checkin_attempts (session_id, at DESC);
 `;

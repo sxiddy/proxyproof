@@ -6,11 +6,18 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
+import android.bluetooth.le.AdvertisingSet
+import android.bluetooth.le.AdvertisingSetCallback
+import android.bluetooth.le.AdvertisingSetParameters
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.location.LocationManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
@@ -18,20 +25,32 @@ import expo.modules.kotlin.modules.ModuleDefinition
 
 /**
  * Bare-bones BLE for ProxyProof: the organiser's phone advertises a small
- * manufacturer-data packet, students' phones scan for it. No pairing, no GATT.
+ * manufacturer-data packet, students' phones scan for it (and advertise a short
+ * echo back). No pairing, no GATT.
  */
 @SuppressLint("MissingPermission") // runtime permissions are requested from JS before any call
 class ProxyBeaconModule : Module() {
-  private var advertiseCallback: AdvertiseCallback? = null
+  private val main = Handler(Looper.getMainLooper())
+
+  // Advertising: an AdvertisingSet on Android 8+ (payload swaps without a gap),
+  // the classic advertiser on Android 7.
+  private var advertisingSet: AdvertisingSet? = null
+  private var setCallback: AdvertisingSetCallback? = null
+  private var legacyCallback: AdvertiseCallback? = null
+  private var pendingAdvertise: Promise? = null
+
+  // Scanning
   private var scanCallback: ScanCallback? = null
+  private var scanKey = ""
   private var scanManufacturerId = 0
+  private var scanPrefix = ByteArray(0)
+  private var retriedScan = false
+  private val restartScan = Runnable { restartScanning() }
+
+  private val context: Context? get() = appContext.reactContext
 
   private val adapter: BluetoothAdapter?
-    get() {
-      val context = appContext.reactContext ?: return null
-      val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?
-      return manager?.adapter
-    }
+    get() = (context?.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?)?.adapter
 
   override fun definition() = ModuleDefinition {
     Name("ProxyBeacon")
@@ -43,6 +62,8 @@ class ProxyBeaconModule : Module() {
       when {
         a == null -> "unsupported"
         !a.isEnabled -> "off"
+        // Before Android 12, BLE scans return nothing while Location is switched off.
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S && !locationEnabled() -> "location_off"
         else -> "on"
       }
     }
@@ -63,41 +84,29 @@ class ProxyBeaconModule : Module() {
         promise.reject(CodedException("ADVERTISE_UNSUPPORTED", "This phone can't broadcast BLE", null))
         return@AsyncFunction
       }
-
-      // Swap the packet: stop the old advert, start one with the new token.
-      stopAdvertisingInternal()
-
-      val settings = AdvertiseSettings.Builder()
-        .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-        .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
-        .setConnectable(false)
-        .setTimeout(0)
-        .build()
       val data = AdvertiseData.Builder()
         .setIncludeDeviceName(false)
         .setIncludeTxPowerLevel(false)
         .addManufacturerData(manufacturerId, hexToBytes(payloadHex))
         .build()
 
-      var settled = false
-      val callback = object : AdvertiseCallback() {
-        override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-          if (!settled) { settled = true; promise.resolve(null) }
-        }
+      // A previous call that never got its callback shouldn't hang JS forever.
+      pendingAdvertise?.resolve(null)
+      pendingAdvertise = promise
 
-        override fun onStartFailure(errorCode: Int) {
-          if (settled) return
-          settled = true
-          if (errorCode == ADVERTISE_FAILED_ALREADY_STARTED) promise.resolve(null)
-          else promise.reject(CodedException("ADVERTISE_FAILED", "Advertising failed (code $errorCode)", null))
-        }
-      }
-      advertiseCallback = callback
       try {
-        advertiser.startAdvertising(settings, data, callback)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+          val current = advertisingSet
+          if (current != null) {
+            current.setAdvertisingData(data) // result arrives in onAdvertisingDataSet
+          } else {
+            startSet(advertiser, data)
+          }
+        } else {
+          startLegacy(advertiser, data)
+        }
       } catch (e: SecurityException) {
-        advertiseCallback = null
-        if (!settled) { settled = true; promise.reject(CodedException("NO_PERMISSION", "Bluetooth permission missing", e)) }
+        settleAdvertise(CodedException("NO_PERMISSION", "Bluetooth permission missing", e))
       }
     }
 
@@ -111,50 +120,25 @@ class ProxyBeaconModule : Module() {
         promise.reject(CodedException("BLUETOOTH_OFF", "Bluetooth is off", null))
         return@AsyncFunction
       }
-      val scanner = a.bluetoothLeScanner
-      if (scanner == null) {
-        promise.reject(CodedException("SCAN_UNSUPPORTED", "This phone can't scan BLE", null))
-        return@AsyncFunction
-      }
-      // Android throttles apps that restart scans too often, so keep one running.
-      if (scanCallback != null && scanManufacturerId == manufacturerId) {
+      // Android throttles apps that start scans more than 5 times in 30s, so if
+      // we're already scanning for the same thing, leave it running.
+      val key = "$manufacturerId:$prefixHex"
+      if (scanCallback != null && scanKey == key) {
         promise.resolve(null)
         return@AsyncFunction
       }
       stopScanningInternal()
-
-      val prefix = hexToBytes(prefixHex)
-      val filter = ScanFilter.Builder()
-        .setManufacturerData(manufacturerId, prefix, ByteArray(prefix.size) { 0xFF.toByte() })
-        .build()
-      val settings = ScanSettings.Builder()
-        .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-        .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
-        .setReportDelay(0)
-        .build()
-
-      val callback = object : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult) {
-          val bytes = result.scanRecord?.getManufacturerSpecificData(manufacturerId) ?: return
-          sendEvent("onBeacon", mapOf("payload" to bytesToHex(bytes), "rssi" to result.rssi, "at" to System.currentTimeMillis().toDouble()))
-        }
-
-        override fun onBatchScanResults(results: MutableList<ScanResult>) {
-          results.forEach { onScanResult(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, it) }
-        }
-
-        override fun onScanFailed(errorCode: Int) {
-          scanCallback = null
-          sendEvent("onScanError", mapOf("code" to errorCode))
-        }
-      }
+      scanKey = key
+      scanManufacturerId = manufacturerId
+      scanPrefix = hexToBytes(prefixHex)
+      retriedScan = false
       try {
-        scanner.startScan(listOf(filter), settings, callback)
-        scanCallback = callback
-        scanManufacturerId = manufacturerId
+        beginScan()
         promise.resolve(null)
       } catch (e: SecurityException) {
         promise.reject(CodedException("NO_PERMISSION", "Bluetooth permission missing", e))
+      } catch (e: IllegalStateException) {
+        promise.reject(CodedException("SCAN_FAILED", e.message ?: "Scan failed", e))
       }
     }
 
@@ -168,21 +152,146 @@ class ProxyBeaconModule : Module() {
     }
   }
 
+  // ---- advertising ----------------------------------------------------------
+
+  private fun startSet(advertiser: android.bluetooth.le.BluetoothLeAdvertiser, data: AdvertiseData) {
+    val params = AdvertisingSetParameters.Builder()
+      .setLegacyMode(true)
+      .setConnectable(false)
+      .setScannable(false)
+      .setInterval(AdvertisingSetParameters.INTERVAL_LOW)
+      .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_HIGH)
+      .build()
+    val cb = object : AdvertisingSetCallback() {
+      override fun onAdvertisingSetStarted(set: AdvertisingSet?, txPower: Int, status: Int) {
+        if (status == ADVERTISE_SUCCESS && set != null) {
+          advertisingSet = set
+          settleAdvertise(null)
+        } else {
+          setCallback = null
+          settleAdvertise(CodedException("ADVERTISE_FAILED", "Advertising failed (code $status)", null))
+        }
+      }
+
+      override fun onAdvertisingDataSet(set: AdvertisingSet?, status: Int) {
+        settleAdvertise(if (status == ADVERTISE_SUCCESS) null else CodedException("ADVERTISE_FAILED", "Couldn't update advert (code $status)", null))
+      }
+
+      override fun onAdvertisingSetStopped(set: AdvertisingSet?) {
+        if (set == advertisingSet) advertisingSet = null
+      }
+    }
+    setCallback = cb
+    advertiser.startAdvertisingSet(params, data, null, null, null, cb)
+  }
+
+  private fun startLegacy(advertiser: android.bluetooth.le.BluetoothLeAdvertiser, data: AdvertiseData) {
+    legacyCallback?.let { runCatching { advertiser.stopAdvertising(it) } }
+    val settings = AdvertiseSettings.Builder()
+      .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+      .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+      .setConnectable(false)
+      .setTimeout(0)
+      .build()
+    val cb = object : AdvertiseCallback() {
+      override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) = settleAdvertise(null)
+      override fun onStartFailure(errorCode: Int) = settleAdvertise(
+        if (errorCode == ADVERTISE_FAILED_ALREADY_STARTED) null
+        else CodedException("ADVERTISE_FAILED", "Advertising failed (code $errorCode)", null),
+      )
+    }
+    legacyCallback = cb
+    advertiser.startAdvertising(settings, data, cb)
+  }
+
+  private fun settleAdvertise(error: CodedException?) {
+    val p = pendingAdvertise ?: return
+    pendingAdvertise = null
+    if (error == null) p.resolve(null) else p.reject(error)
+  }
+
   private fun stopAdvertisingInternal() {
-    val cb = advertiseCallback ?: return
-    advertiseCallback = null
+    val advertiser = adapter?.bluetoothLeAdvertiser
     try {
-      adapter?.bluetoothLeAdvertiser?.stopAdvertising(cb)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) setCallback?.let { advertiser?.stopAdvertisingSet(it) }
+      legacyCallback?.let { advertiser?.stopAdvertising(it) }
+    } catch (_: Exception) {
+    }
+    setCallback = null
+    legacyCallback = null
+    advertisingSet = null
+    settleAdvertise(null)
+  }
+
+  // ---- scanning -------------------------------------------------------------
+
+  private fun beginScan() {
+    val scanner = adapter?.bluetoothLeScanner ?: throw IllegalStateException("This phone can't scan BLE")
+    val filter = ScanFilter.Builder()
+      .setManufacturerData(scanManufacturerId, scanPrefix, ByteArray(scanPrefix.size) { 0xFF.toByte() })
+      .build()
+    val settings = ScanSettings.Builder()
+      .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+      .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+      .setReportDelay(0)
+      .build()
+    val id = scanManufacturerId
+    val cb = object : ScanCallback() {
+      override fun onScanResult(callbackType: Int, result: ScanResult) {
+        val bytes = result.scanRecord?.getManufacturerSpecificData(id) ?: return
+        sendEvent("onBeacon", mapOf("payload" to bytesToHex(bytes), "rssi" to result.rssi, "at" to System.currentTimeMillis().toDouble()))
+      }
+
+      override fun onBatchScanResults(results: MutableList<ScanResult>) {
+        results.forEach { onScanResult(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, it) }
+      }
+
+      override fun onScanFailed(errorCode: Int) {
+        scanCallback = null
+        main.removeCallbacks(restartScan)
+        // One quiet retry before bothering the user.
+        if (!retriedScan) {
+          retriedScan = true
+          main.postDelayed({ runCatching { beginScan() }.onFailure { sendEvent("onScanError", mapOf("code" to errorCode)) } }, 2000)
+        } else {
+          sendEvent("onScanError", mapOf("code" to errorCode))
+        }
+      }
+    }
+    scanner.startScan(listOf(filter), settings, cb)
+    scanCallback = cb
+    // Android quietly downgrades scans older than 30 minutes, so refresh at 25.
+    main.removeCallbacks(restartScan)
+    main.postDelayed(restartScan, 25 * 60 * 1000L)
+  }
+
+  private fun restartScanning() {
+    val cb = scanCallback ?: return
+    runCatching { adapter?.bluetoothLeScanner?.stopScan(cb) }
+    scanCallback = null
+    retriedScan = false
+    runCatching { beginScan() }.onFailure { sendEvent("onScanError", mapOf("code" to -1)) }
+  }
+
+  private fun stopScanningInternal() {
+    main.removeCallbacks(restartScan)
+    val cb = scanCallback ?: return
+    scanCallback = null
+    scanKey = ""
+    try {
+      adapter?.bluetoothLeScanner?.stopScan(cb)
     } catch (_: Exception) {
     }
   }
 
-  private fun stopScanningInternal() {
-    val cb = scanCallback ?: return
-    scanCallback = null
-    try {
-      adapter?.bluetoothLeScanner?.stopScan(cb)
-    } catch (_: Exception) {
+  // ---- helpers --------------------------------------------------------------
+
+  private fun locationEnabled(): Boolean {
+    val lm = context?.getSystemService(Context.LOCATION_SERVICE) as LocationManager? ?: return true
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      lm.isLocationEnabled
+    } else {
+      lm.isProviderEnabled(LocationManager.GPS_PROVIDER) || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
     }
   }
 

@@ -58,7 +58,7 @@ export default function AdminHome() {
           <Small>Admin</Small>
           <H1>Phone switches</H1>
         </View>
-        <Pressable hitSlop={10} onPress={() => router.push('/settings')}><Small>Settings</Small></Pressable>
+        <Pressable hitSlop={10} accessibilityRole="button" onPress={() => router.push('/settings')}><Small>Settings</Small></Pressable>
       </View>
 
       {overview ? (

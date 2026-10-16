@@ -5,6 +5,7 @@ import {
   type TextInputProps, type TextProps, type ViewStyle,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Animated, { ZoomIn } from 'react-native-reanimated';
 import { colors, fonts, radius, space } from '@/lib/theme';
 
 export function Screen({ children, scroll = true, refreshing, onRefresh, footer, padded = true }: {
@@ -17,7 +18,7 @@ export function Screen({ children, scroll = true, refreshing, onRefresh, footer,
         <ScrollView
           contentContainerStyle={[inner, { paddingBottom: space(10) }]}
           keyboardShouldPersistTaps="handled"
-          refreshControl={onRefresh ? <RefreshControl refreshing={!!refreshing} onRefresh={onRefresh} tintColor={colors.accent} colors={[colors.accent]} /> : undefined}
+          refreshControl={onRefresh ? <RefreshControl refreshing={!!refreshing} onRefresh={onRefresh} tintColor={colors.signal} colors={[colors.signal]} /> : undefined}
         >
           {children}
         </ScrollView>
@@ -33,7 +34,7 @@ export function TopBar({ title, back = true, right }: { title?: string; back?: b
   return (
     <View style={styles.topBar}>
       {back ? (
-        <Pressable hitSlop={12} onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}>
+        <Pressable hitSlop={12} accessibilityRole="button" accessibilityLabel="Back" onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}>
           <Text style={styles.back}>← Back</Text>
         </Pressable>
       ) : <View />}
@@ -67,6 +68,8 @@ export function Button({ title, onPress, kind = 'primary', loading, disabled, sm
       onPress={onPress}
       disabled={off}
       accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityState={{ disabled: !!off, busy: !!loading }}
       style={({ pressed }) => [
         styles.btn, small && styles.btnSmall, { backgroundColor: k.bg, borderColor: k.border },
         pressed && { transform: [{ translateY: 1 }], opacity: 0.9 }, off && { opacity: 0.5 }, style,
@@ -160,12 +163,14 @@ export function Loading() {
   return <View style={{ paddingVertical: space(16), alignItems: 'center' }}><ActivityIndicator color={colors.accent} /></View>;
 }
 
-/** The little rubber-stamp "PRESENT" mark. Slightly crooked on purpose. */
+/** The little rubber-stamp "PRESENT" mark. Slightly crooked on purpose, and it thunks in. */
 export function Stamp({ text = 'Present', color = colors.ok, size = 1 }: { text?: string; color?: string; size?: number }) {
   return (
-    <View style={[styles.stamp, { borderColor: color, transform: [{ rotate: '-6deg' }, { scale: size }] }]}>
-      <Text style={[styles.stampText, { color }]}>{text}</Text>
-    </View>
+    <Animated.View entering={ZoomIn.springify().damping(9).mass(0.6)} style={{ alignSelf: 'flex-start' }}>
+      <View style={[styles.stamp, { borderColor: color, transform: [{ rotate: '-6deg' }, { scale: size }] }]} accessible accessibilityLabel={text}>
+        <Text style={[styles.stampText, { color }]}>{text}</Text>
+      </View>
+    </Animated.View>
   );
 }
 
@@ -174,7 +179,11 @@ export function Meter({ value, height = 8 }: { value: number | null; height?: nu
   const v = value ?? 0;
   const color = value == null ? colors.line : v >= 75 ? colors.ok : v >= 60 ? colors.warn : colors.danger;
   return (
-    <View style={{ height, borderRadius: height, backgroundColor: colors.sunk, overflow: 'hidden' }}>
+    <View
+      style={{ height, borderRadius: height, backgroundColor: colors.sunk, overflow: 'hidden' }}
+      accessibilityRole="progressbar"
+      accessibilityValue={value == null ? { text: 'No sessions yet' } : { min: 0, max: 100, now: v, text: `${v}%` }}
+    >
       <View style={{ width: `${v}%`, height: '100%', backgroundColor: color, borderRadius: height }} />
       <View style={{ position: 'absolute', left: '75%', top: 0, bottom: 0, width: 2, backgroundColor: colors.paper }} />
     </View>
@@ -198,7 +207,7 @@ export const styles = StyleSheet.create({
   card: { backgroundColor: colors.card, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.line, padding: space(4), marginBottom: space(3) },
   tag: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.sm },
   tagText: { fontFamily: fonts.semibold, fontSize: 12 },
-  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.accent, marginRight: 5 },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.signal, marginRight: 5 },
   banner: { borderLeftWidth: 4, borderRadius: radius.md, padding: space(3.5), marginBottom: space(4) },
   empty: { paddingVertical: space(12), paddingHorizontal: space(4), alignItems: 'center' },
   stamp: { borderWidth: 2.5, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 3, alignSelf: 'flex-start' },

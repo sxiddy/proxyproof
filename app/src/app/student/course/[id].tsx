@@ -15,6 +15,7 @@ export default function StudentCourse() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [data, setData] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -27,7 +28,7 @@ export default function StudentCourse() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   return (
-    <Screen>
+    <Screen refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }}>
       <TopBar />
       {error ? <Banner tone="danger" title="Couldn't load this course">{error}</Banner> : null}
       {!data && !error ? <Loading /> : null}

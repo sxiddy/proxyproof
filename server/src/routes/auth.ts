@@ -50,12 +50,9 @@ export async function bindDevice(q: Queryable, userId: string, d: z.infer<typeof
     fail(409, 'device_taken', "This phone is already linked to another student. One phone, one student.");
   }
 
-  if (active && active.hardware_id === d.hardwareId) {
-    // Same phone, fresh install: the old key is gone, so swap in the new one.
-    await q.query(`UPDATE devices SET public_key = $2, model = COALESCE($3, model) WHERE id = $1`, [active.id, d.publicKey, d.model ?? null]);
-    return 'active';
-  }
-
+  // Anything other than the exact bound key (a new phone, or this phone after a
+  // reinstall) goes to an admin. Auto-swapping keys would let anyone who knows
+  // a student's hardware id take over their account.
   try {
     if (!active) {
       await q.query(
@@ -94,7 +91,12 @@ function publicUser(u: any) {
 
 export function authRoutes({ db, config }: Ctx) {
   const r = Router();
-  const limiter = rateLimit({ windowMs: 10 * 60_000, limit: 40, standardHeaders: true, legacyHeaders: false });
+  // A whole class shares one college IP, so count only failures, per IP and per email.
+  const limiter = rateLimit({ windowMs: 10 * 60_000, limit: 300, skipSuccessfulRequests: true, standardHeaders: true, legacyHeaders: false });
+  const perEmail = rateLimit({
+    windowMs: 10 * 60_000, limit: 15, skipSuccessfulRequests: true, standardHeaders: true, legacyHeaders: false,
+    keyGenerator: (req) => `email:${String(req.body?.email ?? '').trim().toLowerCase()}`,
+  });
 
   r.post('/auth/register', limiter, async (req, res) => {
     const body = parse(registerBody, req.body);
@@ -121,7 +123,7 @@ export function authRoutes({ db, config }: Ctx) {
     res.status(201).json({ token: signToken(config.jwtSecret, user), user, deviceStatus: result.status });
   });
 
-  r.post('/auth/login', limiter, async (req, res) => {
+  r.post('/auth/login', limiter, perEmail, async (req, res) => {
     const body = parse(loginBody, req.body);
     const { rows: [row] } = await db.query('SELECT * FROM users WHERE email = $1', [body.email]);
     const ok = row && (await bcrypt.compare(body.password, row.password_hash));

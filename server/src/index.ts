@@ -4,6 +4,7 @@ import type { Ctx } from './context.ts';
 import { createDb } from './db.ts';
 import { attachRealtime } from './realtime.ts';
 import { sweepExpired } from './routes/sessions.ts';
+import { seedDemo } from './seed.ts';
 
 const port = Number(process.env.PORT) || 4000;
 const jwtSecret = process.env.JWT_SECRET || 'dev-only-secret-change-me';
@@ -22,6 +23,7 @@ const ctx: Ctx = {
 app = createApp(ctx);
 
 await ensureAdmin(ctx, process.env.ADMIN_EMAIL, process.env.ADMIN_PASSWORD);
+if (process.env.SEED_DEMO === 'true') await seedDemo(db);
 
 // Sessions end on their own; this tells live dashboards when the timer runs out.
 setInterval(() => sweepExpired(db, ctx.rt).catch((e) => console.error('sweep failed', e)), 2000).unref();

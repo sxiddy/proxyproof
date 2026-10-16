@@ -36,7 +36,7 @@ export default function OrganiserHome() {
           <Small>{greeting()},</Small>
           <H1>{user ? firstName(user.name) : ''}</H1>
         </View>
-        <Pressable hitSlop={10} onPress={() => router.push('/settings')}><Small>Settings</Small></Pressable>
+        <Pressable hitSlop={10} accessibilityRole="button" onPress={() => router.push('/settings')}><Small>Settings</Small></Pressable>
       </View>
 
       <Label style={{ marginBottom: space(3) }}>Your courses</Label>

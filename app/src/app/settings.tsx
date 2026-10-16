@@ -56,11 +56,11 @@ export default function Settings() {
 
       <Label style={{ marginTop: space(5), marginBottom: space(3) }}>This phone</Label>
       <Body>Model: {device?.model ?? '…'}</Body>
-      <Body>Bluetooth: {!bleAvailable ? 'not available in this build' : bt === 'on' ? 'on' : bt === 'off' ? 'off' : 'not supported'}</Body>
+      <Body>Bluetooth: {!bleAvailable ? 'not available in this build' : bt === 'on' ? 'on' : bt === 'off' ? 'off' : bt === 'location_off' ? 'on, but Location is off' : 'not supported'}</Body>
       {device ? (
         <View style={{ marginTop: space(2) }}>
-          <Small>Device key (public half only)</Small>
-          <Mono style={{ fontSize: 11 }} selectable>{device.publicKey.replace(/(.{16})/g, '$1 ').trim()}</Mono>
+          <Small>Device fingerprint (handy if an admin asks)</Small>
+          <Mono style={{ fontSize: 13 }}>{device.publicKey.slice(0, 4).toUpperCase()}-{device.publicKey.slice(-4).toUpperCase()}</Mono>
         </View>
       ) : null}
 

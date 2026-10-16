@@ -10,6 +10,7 @@ import { useAutoCheckin, type Marked } from '@/lib/checkin';
 import { firstName, greeting, timeOf } from '@/lib/format';
 import { useSocketEvents } from '@/lib/socket';
 import { colors, space } from '@/lib/theme';
+import { PAYLOAD_PREFIX } from '@/lib/token';
 
 type Course = { id: string; name: string; code: string; organiser: string; attended: number; total: number; percentage: number | null; liveSessionId: string | null };
 
@@ -21,6 +22,7 @@ export default function StudentHome() {
   const [permission, setPermission] = useState<boolean | null>(null);
   const [foreground, setForeground] = useState(AppState.currentState === 'active');
   const [marked, setMarked] = useState<Marked | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const bt = useBluetoothState();
 
   const load = useCallback(async () => {
@@ -33,7 +35,12 @@ export default function StudentHome() {
     }
   }, []);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  // Refresh on focus, and every 30s while open so "session on now" stays honest.
+  useFocusEffect(useCallback(() => {
+    load();
+    const id = setInterval(load, 30_000);
+    return () => clearInterval(id);
+  }, [load]));
 
   useEffect(() => {
     requestBlePermissions().then(setPermission).catch(() => setPermission(false));
@@ -47,10 +54,10 @@ export default function StudentHome() {
   });
 
   const canScan = bleAvailable && permission === true && bt === 'on' && deviceStatus === 'active' && foreground;
-  const scan = useScanner(canScan, onBeacon);
+  const scan = useScanner(canScan, PAYLOAD_PREFIX, onBeacon);
 
   useEffect(() => {
-    const id = setInterval(tick, 2000);
+    const id = setInterval(() => { tick(); setNow(Date.now()); }, 2000);
     return () => clearInterval(id);
   }, [tick]);
 
@@ -58,6 +65,7 @@ export default function StudentHome() {
     marked: (p) => { setMarked({ sessionId: p.sessionId, courseName: p.courseName, markedAt: new Date().toISOString(), method: p.method }); load(); },
     unmarked: (p) => { setMarked((m) => (m?.sessionId === p.sessionId ? null : m)); load(); },
     device: () => { refresh().catch(() => {}); reset(); },
+    session_started: () => load(),
   });
 
   const onRefresh = async () => {
@@ -76,7 +84,7 @@ export default function StudentHome() {
           <Small>{greeting()},</Small>
           <H1>{user ? firstName(user.name) : ''}</H1>
         </View>
-        <Pressable hitSlop={10} onPress={() => router.push('/settings')}><Small>Settings</Small></Pressable>
+        <Pressable hitSlop={10} accessibilityRole="button" onPress={() => router.push('/settings')}><Small>Settings</Small></Pressable>
       </View>
 
       {deviceStatus === 'pending' ? (
@@ -102,13 +110,17 @@ export default function StudentHome() {
         </Banner>
       ) : bt === 'off' ? (
         <Banner tone="warn" title="Turn Bluetooth on">Swipe down and tap the Bluetooth tile. We'll pick it up from there.</Banner>
+      ) : bt === 'location_off' ? (
+        <Banner tone="warn" title="Turn Location on" action={<Button small kind="outline" title="Open Location settings" onPress={() => Linking.sendIntent('android.settings.LOCATION_SOURCE_SETTINGS').catch(() => Linking.openSettings())} />}>
+          Older Android versions only let apps hear Bluetooth signals while Location is on. We don't read your location.
+        </Banner>
       ) : null}
 
-      <StatusPanel state={state} canScan={canScan} marked={marked} liveCount={live.length} scanError={scan.error} />
+      <StatusPanel state={state} canScan={canScan} marked={marked} now={now} liveCount={live.length} scanError={scan.error} />
 
       <View style={styles.sectionHead}>
         <Label>Your courses</Label>
-        <Pressable hitSlop={10} onPress={() => router.push('/student/history')}><Small color={colors.accent}>Full history →</Small></Pressable>
+        <Pressable hitSlop={10} accessibilityRole="button" onPress={() => router.push('/student/history')}><Small color={colors.accent}>Full history →</Small></Pressable>
       </View>
 
       {loadError && !courses ? <Banner tone="danger" title="Couldn't load your courses">{loadError}</Banner> : null}
@@ -148,7 +160,8 @@ export default function StudentHome() {
   );
 }
 
-function StatusPanel({ state, canScan, marked, liveCount, scanError }: {
+function StatusPanel({ state, canScan, marked, now, liveCount, scanError }: {
+  now: number;
   state: ReturnType<typeof useAutoCheckin>['state']; canScan: boolean; marked: Marked | null; liveCount: number; scanError: string | null;
 }) {
   let center = <Mono style={{ color: colors.muted, fontSize: 11 }}>{canScan ? 'listening' : 'paused'}</Mono>;
@@ -175,7 +188,9 @@ function StatusPanel({ state, canScan, marked, liveCount, scanError }: {
     color = colors.danger;
   }
 
-  if (marked && state.phase !== 'blocked') {
+  // Only show the stamp while nothing newer is happening, and not for last period's class.
+  const fresh = marked && state.phase === 'listening' && now - new Date(marked.markedAt).getTime() < 15 * 60_000;
+  if (fresh) {
     return (
       <Card style={[styles.panel, { borderColor: colors.ok }]}>
         <Stamp size={1.3} />

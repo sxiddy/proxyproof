@@ -30,7 +30,8 @@
       ],
       "expo-secure-store",
       "expo-sharing",
-      "./plugins/withBle"
+      "./plugins/withBle",
+      "./plugins/withReleaseSigning"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -9,7 +9,7 @@ export function Chips<T extends string | number>({ options, value, onChange }: {
       {options.map((o) => {
         const on = o.value === value;
         return (
-          <Pressable key={String(o.value)} onPress={() => onChange(o.value)} style={[styles.chip, on && styles.on]} accessibilityRole="radio" accessibilityState={{ selected: on }}>
+          <Pressable key={String(o.value)} onPress={() => onChange(o.value)} style={[styles.chip, on && styles.on]} accessibilityRole="radio" accessibilityState={{ checked: on }}>
             <Text style={[styles.text, on && { color: colors.paper }]}>{o.label}</Text>
             {o.hint ? <Text style={[styles.hint, on && { color: colors.line }]}>{o.hint}</Text> : null}
           </Pressable>

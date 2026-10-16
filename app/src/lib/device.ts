@@ -5,11 +5,12 @@ import * as Crypto from 'expo-crypto';
 import * as Device from 'expo-device';
 import * as SecureStore from 'expo-secure-store';
 
-// Each install makes its own Ed25519 key pair. The private half never leaves
-// the phone's secure storage; every check-in is signed with it, which is how
-// the server knows the request really came from the student's own phone.
+// Each install makes its own Ed25519 key pair, kept in the phone's encrypted
+// SecureStore and only loaded to sign. Every check-in is signed with it, which
+// is how the server knows the request came from the student's own phone.
 
 const KEY = 'pp.device.secret';
+const FALLBACK_KEY = 'pp.device.fallbackId';
 let cached: { secret: Uint8Array; publicKey: string } | null = null;
 
 async function keys() {
@@ -30,10 +31,18 @@ export async function devicePublicKey() {
 
 export async function deviceInfo() {
   const { publicKey } = await keys();
-  let hardwareId = 'unknown';
+  let hardwareId = '';
   try {
-    hardwareId = Application.getAndroidId() || 'unknown';
+    hardwareId = Application.getAndroidId() || '';
   } catch {}
+  if (!hardwareId) {
+    // No Android ID (rare): use a random one we keep, so we never collide with other phones.
+    hardwareId = (await SecureStore.getItemAsync(FALLBACK_KEY)) ?? '';
+    if (!hardwareId) {
+      hardwareId = `rnd-${bytesToHex(Crypto.getRandomBytes(12))}`;
+      await SecureStore.setItemAsync(FALLBACK_KEY, hardwareId);
+    }
+  }
   const model = [Device.manufacturer, Device.modelName].filter(Boolean).join(' ') || 'Android phone';
   return { hardwareId: `android:${hardwareId}`, publicKey, model };
 }
