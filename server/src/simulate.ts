@@ -8,7 +8,7 @@
 // It logs in as the organiser to read the beacon secret, which a real student
 // never sees. Demo tool only.
 
-import { generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, sign } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { checkinMessage, tokenFor, windowAt } from './token.ts';
 
@@ -35,8 +35,12 @@ async function call(path: string, body?: unknown, token?: string) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// Each pretend student keeps the same "phone" (key) every run, so running this
+// twice doesn't look like everyone switched phones.
 function phone(tag: string) {
-  const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+  const seed = createHash('sha256').update(`proxyproof-sim|${tag}`).digest();
+  const privateKey = createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), seed]), format: 'der', type: 'pkcs8' });
+  const publicKey = createPublicKey(privateKey);
   const pub = Buffer.from(publicKey.export({ format: 'jwk' }).x!, 'base64url').toString('hex');
   return { device: { hardwareId: `sim:${tag}`, publicKey: pub, model: 'Simulated phone' }, privateKey };
 }

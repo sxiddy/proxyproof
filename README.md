@@ -2,7 +2,7 @@
 
 Bluetooth attendance that's hard to cheat. The organiser's phone broadcasts a code that changes every 5 seconds. Students' phones hear it and mark them present on their own, as long as they're actually in the room, on their own registered phone.
 
-**[Download the APK](../../releases/latest)** (Android 7+)
+**[Download the APK](../../releases/latest)** (Android 7+) · **[Try the browser demo](https://proxyproof-demo.onrender.com)** (no Bluetooth in browsers, so check-in is manual there; log in as `organiser@proxyproof.dev` / `demo1234`)
 
 | Student | Marked | Organiser, live | Turned away |
 |---|---|---|---|
