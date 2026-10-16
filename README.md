@@ -72,12 +72,12 @@ Two helpers in this repo cover the missing device:
 - **Your laptop as the beacon** (Windows, needs Bluetooth on). It starts a session and broadcasts exactly what the organiser's phone would, so your phone can check in as a student.
   ```bash
   py -m pip install -r tools/requirements.txt
-  py tools/laptop_beacon.py --api https://proxyproof-api.onrender.com --join OSDEMO
+  py tools/laptop_beacon.py --api https://proxyproof-api-2x54.onrender.com --join OSDEMO
   ```
 - **A pretend classroom.** Start a session on your phone as the organiser, then:
   ```bash
   cd server && npm install
-  npm run simulate -- --api https://proxyproof-api.onrender.com --join OSDEMO --count 12
+  npm run simulate -- --api https://proxyproof-api-2x54.onrender.com --join OSDEMO --count 12
   ```
   Twelve students check in over a few seconds, and two of them try something they shouldn't (one too far away, one with an old code). You'll see both appear under "blocked attempts".
 

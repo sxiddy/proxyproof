@@ -38,7 +38,7 @@
       "reactCompiler": true
     },
     "extra": {
-      "apiUrl": "https://proxyproof-api.onrender.com"
+      "apiUrl": "https://proxyproof-api-2x54.onrender.com"
     },
     "platforms": [
       "android"
