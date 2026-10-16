@@ -46,9 +46,22 @@ export async function setAuthToken(token: string | null) {
   else await SecureStore.deleteItemAsync(TOKEN_KEY);
 }
 
+let clockSynced = false;
+
+/**
+ * Midpoint estimate of the server clock. A slow round trip (a sleeping server
+ * can take most of a minute) makes the midpoint useless, so those only count
+ * if we have nothing better yet.
+ */
 export function syncClock(serverTime: number, sentAt: number, receivedAt: number) {
+  if (receivedAt - sentAt > 2000 && clockSynced) return;
   clockOffset = serverTime - (sentAt + receivedAt) / 2;
+  clockSynced = receivedAt - sentAt <= 2000;
 }
+
+let onUnauthorized: (() => void) | null = null;
+/** Called when the server says our login is no longer valid. */
+export const setUnauthorizedHandler = (fn: (() => void) | null) => { onUnauthorized = fn; };
 
 type Opts = { method?: string; body?: unknown; timeoutMs?: number };
 
@@ -78,6 +91,7 @@ export async function api<T = any>(path: string, opts: Opts = {}): Promise<T> {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = data?.error ?? {};
+    if (res.status === 401 && authToken && !path.startsWith('/auth/')) onUnauthorized?.();
     if (res.status === 429) throw new ApiError(429, 'slow_down', 'Too many tries. Give it a minute.');
     throw new ApiError(res.status, err.code ?? 'error', err.message ?? `Request failed (${res.status})`);
   }

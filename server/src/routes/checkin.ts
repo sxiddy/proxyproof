@@ -102,10 +102,15 @@ export function checkinRoutes({ db, config, rt }: Ctx) {
     if (p.rssi < s.rssi_threshold) await reject('too_far');
 
     // 6. Mark. The unique index on (session, device) blocks one phone marking two people.
+    // The NOT EXISTS re-checks removal, in case the organiser removed them a moment ago.
     try {
-      await db.query(
-        `INSERT INTO attendance (session_id, student_id, device_id, method, rssi) VALUES ($1, $2, $3, 'ble', $4)`,
+      const { rows: inserted } = await db.query(
+        `INSERT INTO attendance (session_id, student_id, device_id, method, rssi)
+         SELECT $1, $2, $3, 'ble', $4
+         WHERE NOT EXISTS (SELECT 1 FROM attendance_removals WHERE session_id = $1 AND student_id = $2)
+         RETURNING 1`,
         [s.id, me.id, device.id, p.rssi]);
+      if (!inserted.length) await reject('removed', 403, false);
     } catch (err: any) {
       if (err?.code !== '23505') throw err;
       const { rows: [mine] } = await db.query('SELECT 1 FROM attendance WHERE session_id = $1 AND student_id = $2', [s.id, me.id]);

@@ -45,6 +45,9 @@ export function adminRoutes({ db, config, rt }: Ctx) {
       );
       await q.query(`UPDATE devices SET status = 'active', decided_at = now(), decided_by = $2 WHERE id = $1`, [id, req.user!.id]);
       return d.user_id as string;
+    }).catch((err) => {
+      if (err?.code === '23505') fail(409, 'device_taken', 'That phone is currently linked to a different student.');
+      throw err;
     });
     rt.toUser(studentId, 'device', { status: 'active' });
     res.json({ ok: true });

@@ -6,6 +6,7 @@ import { createApp, ensureAdmin } from '../src/app.ts';
 import type { Ctx } from '../src/context.ts';
 import { createDb } from '../src/db.ts';
 import { checkinMessage, echoFor, tokenFor, windowAt } from '../src/token.ts';
+import { percent } from '../src/routes/courses.ts';
 
 const events: { to: string; event: string; payload: any }[] = [];
 let ctx: Ctx;
@@ -235,5 +236,33 @@ describe('ProxyProof API', () => {
     assert.deepEqual(heard.body.heard, [alice.user.id]);
     const view = await request(app).get(`/sessions/${s.id}`).set(auth(org.token));
     assert.equal(view.body.roster.find((r: any) => r.id === alice.user.id).heard, true);
+  });
+
+  it("shows a live session as 'live' in the register, not absent", async () => {
+    const csv = (await request(app).get(`/courses/${courseId}/export.csv`).set(auth(org.token))).text;
+    const bobRow = csv.split('\n').find((l) => l.startsWith('Bob'))!;
+    assert.match(bobRow, /live/);
+  });
+
+  it('returns 404, not 500, when removing someone who does not exist', async () => {
+    const live = (await request(app).get(`/courses/${courseId}`).set(auth(org.token))).body.sessions.find((x: any) => x.live);
+    const r = await request(app).delete(`/sessions/${live.id}/attendance/00000000-0000-4000-8000-000000000000`).set(auth(org.token));
+    assert.equal(r.status, 404);
+  });
+
+  it("keeps a student's original join date if they're removed and rejoin", async () => {
+    const before = (await ctx.db.query('SELECT joined_at FROM enrollments WHERE student_id = $1', [bob.user.id])).rows[0].joined_at;
+    await request(app).delete(`/courses/${courseId}/students/${bob.user.id}`).set(auth(org.token));
+    const login = await request(app).post('/auth/login').send({ email: 'bob@test.dev', password: 'password1', device: deviceBody(bobNew) });
+    await request(app).post('/courses/join').set(auth(login.body.token)).send({ joinCode });
+    const after = (await ctx.db.query('SELECT joined_at FROM enrollments WHERE student_id = $1', [bob.user.id])).rows[0].joined_at;
+    assert.equal(new Date(after).getTime(), new Date(before).getTime());
+  });
+
+  it('works out percentages without floating-point slips', () => {
+    assert.equal(percent(29, 50), 58);
+    assert.equal(percent(57, 100), 57);
+    assert.equal(percent(3, 4), 75);
+    assert.equal(percent(0, 0), null);
   });
 });

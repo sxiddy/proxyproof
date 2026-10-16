@@ -88,7 +88,10 @@ export function sessionRoutes({ db, config, rt }: Ctx) {
         for (const st of students) rt.toUser(st.student_id, 'session_started', { sessionId: s.id, courseName: course.name });
         return res.status(201).json({ session: sessionJson(s, true), serverTime: Date.now() });
       } catch (err: any) {
-        if (err?.code !== '23505') throw err; // beacon code clash, roll again
+        if (err?.code !== '23505') throw err;
+        // Two taps on Start at once: the second one loses.
+        if (err.constraint === 'sessions_one_live') fail(409, 'session_live', 'This course already has a session running. Close it first.');
+        // Otherwise a beacon code clash: roll again.
       }
     }
     fail(500, 'server_error', "Couldn't start the session. Try again.");
@@ -155,6 +158,8 @@ export function sessionRoutes({ db, config, rt }: Ctx) {
     const s = await ownedSession(db, req.params.id as string, req.user!.id);
     const studentId = req.params.studentId as string;
     if (!uuid.test(studentId)) fail(404, 'not_found', 'Student not found.');
+    const { rows: [known] } = await db.query('SELECT 1 FROM users WHERE id = $1', [studentId]);
+    if (!known) fail(404, 'not_found', 'Student not found.');
     await db.tx(async (q) => {
       await q.query('DELETE FROM attendance WHERE session_id = $1 AND student_id = $2', [s.id, studentId]);
       await q.query('INSERT INTO attendance_removals (session_id, student_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [s.id, studentId]);

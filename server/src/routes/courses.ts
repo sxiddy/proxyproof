@@ -29,7 +29,8 @@ const COUNTS = `(s.closed_at IS NOT NULL AND s.started_at >= e.joined_at) OR a.s
 
 export function percent(attended: number, total: number) {
   // Floor, so 74.6% never shows as a reassuring 75%.
-  return total ? Math.floor((attended / total) * 100) : null;
+  // Integer maths first: (29 / 50) * 100 is 57.99999… in floating point.
+  return total ? Math.floor((attended * 100) / total) : null;
 }
 
 export function courseRoutes({ db, config }: Ctx) {
@@ -103,7 +104,9 @@ export function courseRoutes({ db, config }: Ctx) {
     const { rows: [course] } = await db.query('SELECT id, name, code FROM courses WHERE join_code = $1', [code]);
     if (!course) fail(404, 'bad_join_code', "No course with that code. Double-check it with your organiser.");
     const { rows } = await db.query(
-      'INSERT INTO enrollments (course_id, student_id) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING 1',
+      `INSERT INTO enrollments (course_id, student_id, joined_at)
+       VALUES ($1, $2, COALESCE((SELECT joined_at FROM course_removals WHERE course_id = $1 AND student_id = $2), now()))
+       ON CONFLICT DO NOTHING RETURNING 1`,
       [course.id, req.user!.id],
     );
     res.status(rows.length ? 201 : 200).json({ course, alreadyJoined: !rows.length });
@@ -172,7 +175,12 @@ export function courseRoutes({ db, config }: Ctx) {
   r.delete('/courses/:id/students/:studentId', organiser, async (req, res) => {
     await ownedCourse(db, req.params.id as string, req.user!.id);
     if (!uuid.test(req.params.studentId as string)) fail(404, 'not_found', 'Student not found.');
-    await db.query('DELETE FROM enrollments WHERE course_id = $1 AND student_id = $2', [req.params.id, req.params.studentId]);
+    await db.tx(async (q) => {
+      await q.query(`INSERT INTO course_removals (course_id, student_id, joined_at)
+        SELECT course_id, student_id, joined_at FROM enrollments WHERE course_id = $1 AND student_id = $2
+        ON CONFLICT DO NOTHING`, [req.params.id, req.params.studentId]);
+      await q.query('DELETE FROM enrollments WHERE course_id = $1 AND student_id = $2', [req.params.id, req.params.studentId]);
+    });
     res.json({ ok: true });
   });
 
@@ -180,7 +188,7 @@ export function courseRoutes({ db, config }: Ctx) {
   r.get('/courses/:id/export.csv', organiser, async (req, res) => {
     const course = await ownedCourse(db, req.params.id as string, req.user!.id);
     const { rows: sessions } = await db.query(
-      'SELECT id, started_at FROM sessions WHERE course_id = $1 ORDER BY started_at', [course.id]);
+      'SELECT id, started_at, closed_at FROM sessions WHERE course_id = $1 ORDER BY started_at', [course.id]);
     const { rows: students } = await db.query(`
       SELECT u.id, u.name, u.email, u.roll_no, e.joined_at FROM enrollments e JOIN users u ON u.id = e.student_id
       WHERE e.course_id = $1 ORDER BY u.name`, [course.id]);
@@ -197,6 +205,7 @@ export function courseRoutes({ db, config }: Ctx) {
         const m = marked.get(`${s.id}:${st.id}`);
         if (m) { attended++; total++; return m === 'manual' ? 'P (manual)' : 'P'; }
         if (new Date(s.started_at) < new Date(st.joined_at)) return '-';
+        if (!s.closed_at) return 'live'; // still running: not absent yet, so don't count it
         total++;
         return 'A';
       });

@@ -80,7 +80,7 @@ export default function Settings() {
       {user ? (
         <>
           <Rule />
-          <Button title="Log out" kind="danger" onPress={async () => { await logout(); router.replace('/welcome'); }} />
+          <Button title="Log out" kind="danger" onPress={async () => { await logout(); if (router.canDismiss()) router.dismissAll(); router.replace('/welcome'); }} />
         </>
       ) : null}
 

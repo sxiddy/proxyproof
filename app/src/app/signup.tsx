@@ -30,6 +30,7 @@ export default function Signup() {
         rollNo: role === 'student' ? rollNo.trim() || undefined : undefined,
         organiserCode: role === 'organiser' ? code.trim() : undefined,
       });
+      if (router.canDismiss()) router.dismissAll();
       router.replace('/');
     } catch (e) {
       setError(errorText(e));

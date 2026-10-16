@@ -1,7 +1,7 @@
 import { useKeepAwake } from 'expo-keep-awake';
 import { router, useLocalSearchParams, usePreventRemove } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, AppState, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Alert, AppState, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Chips, RANGE_OPTIONS } from '@/components/chips';
 import { Radar } from '@/components/radar';
 import { Banner, Body, Button, Card, H1, H2, H3, Label, Loading, Mono, Rule, Screen, Small, Stamp, Tag } from '@/components/ui';
@@ -91,12 +91,17 @@ export default function LiveSession() {
     }
   }, [session, remaining <= 0, load]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const broadcasting = live && permission === true && bt === 'on' && foreground && bleAvailable;
+  // On Android 11 and older, advertising needs no runtime permission and works with Location off;
+  // only hearing the students' echoes needs both.
+  const legacy = Platform.OS === 'android' && Number(Platform.Version) < 31;
+  const radioOn = bt === 'on' || bt === 'location_off';
+  const broadcasting = live && (permission === true || legacy) && radioOn && foreground && bleAvailable;
+  const hearing = broadcasting && permission === true && bt === 'on';
   const { token, error: bleError, nextChangeAt } = useBroadcast(session?.beacon ?? null, broadcasting);
-  const cantBroadcast = live && bleAvailable && bt === 'on' && permission === true && !canAdvertise();
+  const cantBroadcast = live && bleAvailable && radioOn && (permission === true || legacy) && !canAdvertise();
 
   // Listen for students' phones answering back, and tell the server which ones we heard.
-  useScanner(broadcasting, ECHO_PREFIX, (e) => {
+  useScanner(hearing, ECHO_PREFIX, (e) => {
     const echo = decodeEcho(e.payload);
     if (echo) echoes.current.set(echo, Date.now());
   });

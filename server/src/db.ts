@@ -58,6 +58,14 @@ CREATE TABLE IF NOT EXISTS enrollments (
   PRIMARY KEY (course_id, student_id)
 );
 
+-- Remembers when a removed student first joined, so rejoining doesn't wipe old absences.
+CREATE TABLE IF NOT EXISTS course_removals (
+  course_id  uuid NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  student_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  joined_at  timestamptz NOT NULL,
+  PRIMARY KEY (course_id, student_id)
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   course_id      uuid NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
@@ -73,6 +81,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- closed_at is filled in when a session is closed by hand or runs out of time,
 -- so a beacon code is only reserved while its session is live.
 CREATE UNIQUE INDEX IF NOT EXISTS sessions_live_beacon ON sessions (beacon_code) WHERE closed_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_one_live ON sessions (course_id) WHERE closed_at IS NULL;
 CREATE INDEX IF NOT EXISTS sessions_course ON sessions (course_id, started_at DESC);
 
 CREATE TABLE IF NOT EXISTS attendance (
@@ -120,20 +129,23 @@ export async function createDb(url = process.env.DATABASE_URL): Promise<Db> {
   if (url) {
     const local = /localhost|127\.0\.0\.1/.test(url);
     const pool = new pg.Pool({ connectionString: url, ssl: local ? false : { rejectUnauthorized: false } });
+    // An idle connection dropped by the database would otherwise crash the process.
+    pool.on('error', (e) => console.error('Postgres pool error:', e.message));
     db = {
       query: (sql, params) => pool.query(sql, params as any[]) as any,
       async tx(fn) {
         const client = await pool.connect();
+        let broken: Error | undefined;
         try {
           await client.query('BEGIN');
           const result = await fn({ query: (sql, params) => client.query(sql, params as any[]) as any });
           await client.query('COMMIT');
           return result;
         } catch (err) {
-          await client.query('ROLLBACK');
+          try { await client.query('ROLLBACK'); } catch (e) { broken = e as Error; }
           throw err;
         } finally {
-          client.release();
+          client.release(broken);
         }
       },
       close: () => pool.end(),

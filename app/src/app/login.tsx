@@ -20,6 +20,7 @@ export default function Login() {
     setError(null);
     try {
       await login(email.trim(), password);
+      if (router.canDismiss()) router.dismissAll();
       router.replace('/');
     } catch (e) {
       setError(errorText(e));

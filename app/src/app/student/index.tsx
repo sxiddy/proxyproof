@@ -48,10 +48,12 @@ export default function StudentHome() {
     return () => sub.remove();
   }, []);
 
-  const { state, onBeacon, tick, reset } = useAutoCheckin(user?.id, (m) => {
+  const { state, onBeacon, tick, reset, forgetIgnored } = useAutoCheckin(user?.id, (m) => {
     setMarked(m);
     load();
   });
+  // Back from joining a course: that class's beacon should count straight away.
+  useFocusEffect(forgetIgnored);
 
   const canScan = bleAvailable && permission === true && bt === 'on' && deviceStatus === 'active' && foreground;
   const scan = useScanner(canScan, PAYLOAD_PREFIX, onBeacon);

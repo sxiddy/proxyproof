@@ -69,8 +69,10 @@ export async function bindDevice(q: Queryable, userId: string, d: z.infer<typeof
     );
     return 'pending';
   } catch (err: any) {
-    if (err?.code === '23505') fail(409, 'device_taken', "This phone is already linked to another student. One phone, one student.");
-    throw err;
+    if (err?.code !== '23505') throw err;
+    // Two logins from this account landed at the same moment; the other one won.
+    if (/^devices_one_(active|pending)_per_user$/.test(err.constraint)) fail(409, 'try_again', 'Another sign-in from this account just went through. Try again.');
+    return fail(409, 'device_taken', "This phone is already linked to another student. One phone, one student.");
   }
 }
 
@@ -117,6 +119,10 @@ export function authRoutes({ db, config }: Ctx) {
       );
       const status = body.role === 'student' ? await bindDevice(q, user.id, body.device!) : 'none';
       return { user, status };
+    }).catch((err) => {
+      // Same email registered twice at once: the second one loses the race.
+      if (err?.code === '23505' && err.constraint === 'users_email_key') fail(409, 'email_taken', 'There is already an account with that email.');
+      throw err;
     });
 
     const user = publicUser(result.user);

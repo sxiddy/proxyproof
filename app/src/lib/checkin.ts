@@ -31,8 +31,9 @@ const COOLDOWN: Record<string, number> = {
 };
 // These won't fix themselves by walking closer, so stop and tell the student.
 const BLOCKING = new Set(['device_pending', 'device_not_bound', 'bad_signature', 'device_used', 'unauthenticated', 'removed']);
-// Someone else's class, or one that's over. Not worth mentioning.
-const IGNORE = new Set(['not_enrolled', 'no_session', 'session_closed']);
+// Someone else's class, or one that's over. Not worth mentioning. "Not enrolled" wears off,
+// because the student may be joining the course right now.
+const IGNORE: Record<string, number> = { not_enrolled: 20_000, no_session: Infinity, session_closed: Infinity };
 
 const median = (xs: number[]) => {
   const s = [...xs].sort((a, b) => a - b);
@@ -59,8 +60,8 @@ export function useAutoCheckin(userId: string | undefined, onMarked: (m: Marked)
   const readings = useRef(new Map<number, Reading[]>());
   const holdUntil = useRef(new Map<number, number>());
   const done = useRef(new Set<number>());
-  /** Beacons from other classes: we don't check in, and we don't echo back. */
-  const ignored = useRef(new Set<number>());
+  /** Beacons from other classes, and until when: we don't check in, and we don't echo back. */
+  const ignored = useRef(new Map<number, number>());
   const inFlight = useRef(false);
   const lastHeard = useRef(0);
   const echoToken = useRef<string | null>(null);
@@ -83,7 +84,7 @@ export function useAutoCheckin(userId: string | undefined, onMarked: (m: Marked)
     const { beaconCode, token } = decoded;
     const now = Date.now();
     lastHeard.current = now;
-    if (ignored.current.has(beaconCode)) return;
+    if ((ignored.current.get(beaconCode) ?? 0) > now) return;
     echo(token);
     if (done.current.has(beaconCode)) return;
 
@@ -125,8 +126,8 @@ export function useAutoCheckin(userId: string | undefined, onMarked: (m: Marked)
         holdUntil.current.set(beaconCode, now + 15_000);
         setState({ phase: 'blocked', message, code });
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
-      } else if (IGNORE.has(code)) {
-        ignored.current.add(beaconCode);
+      } else if (code in IGNORE) {
+        ignored.current.set(beaconCode, Date.now() + IGNORE[code]);
         setState({ phase: 'listening' });
       } else {
         holdUntil.current.set(beaconCode, Date.now() + (COOLDOWN[code] ?? 5000));
@@ -157,7 +158,10 @@ export function useAutoCheckin(userId: string | undefined, onMarked: (m: Marked)
     setState({ phase: 'listening' });
   }, []);
 
+  /** Forget "not your class" verdicts, e.g. after the student joins a course. */
+  const forgetIgnored = useCallback(() => { ignored.current.clear(); }, []);
+
   useEffect(() => () => { stopAdvertising(); }, []);
 
-  return { state, onBeacon, tick, reset };
+  return { state, onBeacon, tick, reset, forgetIgnored };
 }

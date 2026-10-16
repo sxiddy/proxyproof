@@ -101,7 +101,7 @@ cd server
 npm install
 cp .env.example .env
 npm run dev          # http://localhost:4000, embedded Postgres, demo data
-npm test             # 18 end-to-end API tests
+npm test             # 22 end-to-end API tests
 ```
 
 Point the app at it from the app's **Settings → Server** (use your laptop's LAN IP, e.g. `http://192.168.1.5:4000`).
@@ -151,3 +151,4 @@ Socket.IO events: `mark`, `unmark`, `attempt` and `closed` go to the organiser w
 - Android only. iOS limits what an app can put in a BLE advert, so it would need a different packet layout.
 - The app has to be open (foreground) to broadcast and to scan. Android restricts background BLE, and a foreground service is the next step.
 - RSSI comes from the student's phone. Signing stops anyone else from faking it, but a student with a rooted phone and patience could still tamper with their own readings. The other checks (fresh token, bound device) still apply.
+- "One phone, one student" trusts the phone ID the app reports. Someone who rebuilds the app to fake that ID could sign up several brand-new accounts on one phone. Each of those accounts would still have to be in the room, with a fresh code, during the session.

@@ -38,6 +38,8 @@ class ProxyBeaconModule : Module() {
   private var setCallback: AdvertisingSetCallback? = null
   private var legacyCallback: AdvertiseCallback? = null
   private var pendingAdvertise: Promise? = null
+  /** Newest payload asked for while a set was still starting; applied once it starts. */
+  private var queuedData: AdvertiseData? = null
 
   // Scanning
   private var scanCallback: ScanCallback? = null
@@ -46,6 +48,12 @@ class ProxyBeaconModule : Module() {
   private var scanPrefix = ByteArray(0)
   private var retriedScan = false
   private val restartScan = Runnable { restartScanning() }
+  private var retryErrorCode = 0
+  private val retryScan = Runnable {
+    if (scanKey.isNotEmpty() && scanCallback == null) {
+      runCatching { beginScan() }.onFailure { sendEvent("onScanError", mapOf("code" to retryErrorCode)) }
+    }
+  }
 
   private val context: Context? get() = appContext.reactContext
 
@@ -73,16 +81,44 @@ class ProxyBeaconModule : Module() {
       a != null && a.isEnabled && a.isMultipleAdvertisementSupported && a.bluetoothLeAdvertiser != null
     }
 
+    // Everything below runs on the main thread, the same one the Bluetooth callbacks use,
+    // so the fields above are never touched from two threads at once.
     AsyncFunction("startAdvertising") { manufacturerId: Int, payloadHex: String, promise: Promise ->
+      main.post { startAdvertisingOnMain(manufacturerId, payloadHex, promise) }
+    }
+
+    AsyncFunction("stopAdvertising") {
+      main.post { stopAdvertisingInternal() }
+    }
+
+    AsyncFunction("startScanning") { manufacturerId: Int, prefixHex: String, promise: Promise ->
+      main.post { startScanningOnMain(manufacturerId, prefixHex, promise) }
+    }
+
+    AsyncFunction("stopScanning") {
+      main.post { stopScanningInternal() }
+    }
+
+    OnDestroy {
+      main.post {
+        stopAdvertisingInternal()
+        stopScanningInternal()
+      }
+    }
+  }
+
+  // ---- advertising ----------------------------------------------------------
+
+  private fun startAdvertisingOnMain(manufacturerId: Int, payloadHex: String, promise: Promise) {
       val a = adapter
       if (a == null || !a.isEnabled) {
         promise.reject(CodedException("BLUETOOTH_OFF", "Bluetooth is off", null))
-        return@AsyncFunction
+        return
       }
       val advertiser = a.bluetoothLeAdvertiser
       if (advertiser == null) {
         promise.reject(CodedException("ADVERTISE_UNSUPPORTED", "This phone can't broadcast BLE", null))
-        return@AsyncFunction
+        return
       }
       val data = AdvertiseData.Builder()
         .setIncludeDeviceName(false)
@@ -99,6 +135,10 @@ class ProxyBeaconModule : Module() {
           val current = advertisingSet
           if (current != null) {
             current.setAdvertisingData(data) // result arrives in onAdvertisingDataSet
+          } else if (setCallback != null) {
+            // Still starting: don't start a second set, just send this payload once it's up.
+            queuedData = data
+            settleAdvertise(null)
           } else {
             startSet(advertiser, data)
           }
@@ -108,24 +148,20 @@ class ProxyBeaconModule : Module() {
       } catch (e: SecurityException) {
         settleAdvertise(CodedException("NO_PERMISSION", "Bluetooth permission missing", e))
       }
-    }
+  }
 
-    AsyncFunction("stopAdvertising") {
-      stopAdvertisingInternal()
-    }
-
-    AsyncFunction("startScanning") { manufacturerId: Int, prefixHex: String, promise: Promise ->
+  private fun startScanningOnMain(manufacturerId: Int, prefixHex: String, promise: Promise) {
       val a = adapter
       if (a == null || !a.isEnabled) {
         promise.reject(CodedException("BLUETOOTH_OFF", "Bluetooth is off", null))
-        return@AsyncFunction
+        return
       }
       // Android throttles apps that start scans more than 5 times in 30s, so if
       // we're already scanning for the same thing, leave it running.
       val key = "$manufacturerId:$prefixHex"
       if (scanCallback != null && scanKey == key) {
         promise.resolve(null)
-        return@AsyncFunction
+        return
       }
       stopScanningInternal()
       scanKey = key
@@ -140,19 +176,7 @@ class ProxyBeaconModule : Module() {
       } catch (e: IllegalStateException) {
         promise.reject(CodedException("SCAN_FAILED", e.message ?: "Scan failed", e))
       }
-    }
-
-    AsyncFunction("stopScanning") {
-      stopScanningInternal()
-    }
-
-    OnDestroy {
-      stopAdvertisingInternal()
-      stopScanningInternal()
-    }
   }
-
-  // ---- advertising ----------------------------------------------------------
 
   private fun startSet(advertiser: android.bluetooth.le.BluetoothLeAdvertiser, data: AdvertiseData) {
     val params = AdvertisingSetParameters.Builder()
@@ -164,8 +188,15 @@ class ProxyBeaconModule : Module() {
       .build()
     val cb = object : AdvertisingSetCallback() {
       override fun onAdvertisingSetStarted(set: AdvertisingSet?, txPower: Int, status: Int) {
+        if (setCallback !== this) {
+          // Stopped (or replaced) before it finished starting: don't leave it on air.
+          runCatching { advertiser.stopAdvertisingSet(this) }
+          return
+        }
         if (status == ADVERTISE_SUCCESS && set != null) {
           advertisingSet = set
+          queuedData?.let { runCatching { set.setAdvertisingData(it) } }
+          queuedData = null
           settleAdvertise(null)
         } else {
           setCallback = null
@@ -174,6 +205,13 @@ class ProxyBeaconModule : Module() {
       }
 
       override fun onAdvertisingDataSet(set: AdvertisingSet?, status: Int) {
+        if (setCallback !== this) return
+        if (status != ADVERTISE_SUCCESS) {
+          // Drop the broken set so the next call starts a fresh one.
+          runCatching { advertiser.stopAdvertisingSet(this) }
+          setCallback = null
+          advertisingSet = null
+        }
         settleAdvertise(if (status == ADVERTISE_SUCCESS) null else CodedException("ADVERTISE_FAILED", "Couldn't update advert (code $status)", null))
       }
 
@@ -220,6 +258,7 @@ class ProxyBeaconModule : Module() {
     setCallback = null
     legacyCallback = null
     advertisingSet = null
+    queuedData = null
     settleAdvertise(null)
   }
 
@@ -247,12 +286,15 @@ class ProxyBeaconModule : Module() {
       }
 
       override fun onScanFailed(errorCode: Int) {
+        if (scanCallback !== this) return
         scanCallback = null
         main.removeCallbacks(restartScan)
         // One quiet retry before bothering the user.
         if (!retriedScan) {
           retriedScan = true
-          main.postDelayed({ runCatching { beginScan() }.onFailure { sendEvent("onScanError", mapOf("code" to errorCode)) } }, 2000)
+          retryErrorCode = errorCode
+          main.removeCallbacks(retryScan)
+          main.postDelayed(retryScan, 2000)
         } else {
           sendEvent("onScanError", mapOf("code" to errorCode))
         }
@@ -275,9 +317,10 @@ class ProxyBeaconModule : Module() {
 
   private fun stopScanningInternal() {
     main.removeCallbacks(restartScan)
+    main.removeCallbacks(retryScan)
+    scanKey = ""
     val cb = scanCallback ?: return
     scanCallback = null
-    scanKey = ""
     try {
       adapter?.bluetoothLeScanner?.stopScan(cb)
     } catch (_: Exception) {

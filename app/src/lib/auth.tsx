@@ -1,6 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api, ApiError, loadApiState, setAuthToken, setDeviceKey, syncClock } from './api';
+import { api, ApiError, loadApiState, setAuthToken, setDeviceKey, setUnauthorizedHandler, syncClock } from './api';
 import { deviceInfo, devicePublicKey } from './device';
 import { disconnectSocket } from './socket';
 
@@ -101,6 +101,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setDeviceStatus('none');
   }, []);
+
+  // A token the server no longer accepts: log out, and the layout sends us to the welcome screen.
+  useEffect(() => {
+    setUnauthorizedHandler(() => { logout().catch(() => {}); });
+    return () => setUnauthorizedHandler(null);
+  }, [logout]);
 
   const value = useMemo(
     () => ({ ready, waking, user, deviceStatus, login, register, logout, refresh }),
