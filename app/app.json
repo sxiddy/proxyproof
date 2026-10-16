@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "ProxyProof",
+    "slug": "proxyproof",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "proxyproof",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "dev.proxyproof.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#F3EEE3",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundImage": "./assets/images/android-icon-background.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "softwareKeyboardLayoutMode": "resize"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#F3EEE3",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 96
+        }
+      ],
+      "expo-secure-store",
+      "expo-sharing",
+      "./plugins/withBle"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "apiUrl": "https://proxyproof-api.onrender.com"
+    },
+    "platforms": [
+      "android"
+    ]
+  }
+}
