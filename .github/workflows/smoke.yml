@@ -1,0 +1,46 @@
+name: Smoke test
+
+# Installs the released APK on an Android emulator, opens it and grabs a
+# screenshot, so we know it starts up without crashing.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release to test
+        default: v1.0.0
+
+jobs:
+  emulator:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Download APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "${{ inputs.tag }}" -R "$GITHUB_REPOSITORY" -p ProxyProof.apk
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: |
+            adb install -r ProxyProof.apk
+            adb logcat -c
+            adb shell monkey -p dev.proxyproof.app -c android.intent.category.LAUNCHER 1
+            sleep 30
+            adb exec-out screencap -p > launch.png
+            adb logcat -d > logcat.txt
+            adb shell pidof dev.proxyproof.app && echo "App is running" || (echo "App is not running"; exit 1)
+            ! grep -E "FATAL EXCEPTION|AndroidRuntime: Process: dev.proxyproof" logcat.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke
+          path: |
+            launch.png
+            logcat.txt
