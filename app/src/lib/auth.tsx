@@ -1,4 +1,4 @@
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from './store';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, ApiError, loadApiState, setAuthToken, setDeviceKey, setUnauthorizedHandler, syncClock } from './api';
 import { deviceInfo, devicePublicKey } from './device';

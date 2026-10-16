@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from './store';
 
 const URL_KEY = 'pp.apiUrl';
 const TOKEN_KEY = 'pp.authToken';

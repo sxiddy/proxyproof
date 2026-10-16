@@ -24,6 +24,21 @@ services:
           name: proxyproof-db
           property: connectionString
 
+  # Browser demo of the app (no Bluetooth in browsers; see README).
+  - type: web
+    name: proxyproof-demo
+    runtime: static
+    rootDir: app
+    buildCommand: npm ci && npx expo export -p web --output-dir dist
+    staticPublishPath: dist
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
 databases:
   - name: proxyproof-db
     plan: free

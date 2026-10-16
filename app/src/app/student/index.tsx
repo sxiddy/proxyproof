@@ -100,7 +100,7 @@ export default function StudentHome() {
         </Banner>
       ) : null}
       {!bleAvailable ? (
-        <Banner tone="danger" title="Bluetooth isn't available in this build">Install the ProxyProof APK to check in.</Banner>
+        <Banner tone="warn" title="Browser demo">Browsers can't hear Bluetooth, so check-in is off here. Your organiser can still mark you by hand, and the Android app does it automatically.</Banner>
       ) : permission === false ? (
         <Banner tone="warn" title="Bluetooth permission needed" action={
           <View style={{ flexDirection: 'row', gap: space(2) }}>

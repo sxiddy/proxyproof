@@ -3,7 +3,7 @@ import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import * as Application from 'expo-application';
 import * as Crypto from 'expo-crypto';
 import * as Device from 'expo-device';
-import * as SecureStore from 'expo-secure-store';
+import * as SecureStore from './store';
 
 // Each install makes its own Ed25519 key pair, kept in the phone's encrypted
 // SecureStore and only loaded to sign. Every check-in is signed with it, which

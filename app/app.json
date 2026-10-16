@@ -41,7 +41,12 @@
       "apiUrl": "https://proxyproof-api-2x54.onrender.com"
     },
     "platforms": [
-      "android"
-    ]
+      "android",
+      "web"
+    ],
+    "web": {
+      "output": "single",
+      "bundler": "metro"
+    }
   }
 }

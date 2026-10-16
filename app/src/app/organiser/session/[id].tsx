@@ -205,8 +205,8 @@ export default function LiveSession() {
 
       {live ? (
         <>
-          {!bleAvailable ? <Banner tone="danger" title="Bluetooth isn't available in this build">Install the APK on an Android phone to broadcast.</Banner> : null}
-          {permission === false ? (
+          {!bleAvailable ? <Banner tone="warn" title="Browser demo">Browsers can't send Bluetooth, so nothing is broadcast here. Use "Mark present" below, or install the Android app to see automatic check-ins.</Banner> : null}
+          {bleAvailable && permission === false ? (
             <Banner tone="warn" title="Bluetooth permission needed" action={<Button small title="Allow" onPress={() => requestBlePermissions().then(setPermission)} />}>
               Without it your phone can't send the signal.
             </Banner>
@@ -229,7 +229,7 @@ export default function LiveSession() {
               <Mono style={styles.token}>{token ? token.toUpperCase().replace(/(.{4})/g, '$1 ').trim() : broadcasting ? '···· ···· ···· ····' : 'not broadcasting'}</Mono>
               <View style={styles.tokenBar}><View style={[styles.tokenFill, { width: `${tokenProgress * 100}%` }]} /></View>
               <Small style={{ marginTop: space(2) }}>
-                {broadcasting ? 'Leave this screen open on the desk. The screen stays on while the session runs.' : 'Paused. Bring the app back to the front to keep broadcasting.'}
+                {broadcasting ? 'Leave this screen open on the desk. The screen stays on while the session runs.' : !bleAvailable ? "The browser demo can't broadcast. The Android app does this part." : 'Paused. Bring the app back to the front to keep broadcasting.'}
               </Small>
             </View>
           </Card>
